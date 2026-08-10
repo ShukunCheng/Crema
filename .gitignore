@@ -1,0 +1,5 @@
+# Anchored to the repo root so they don't match the cmd/crema/ source directory.
+/crema
+/crema.exe
+/dist/
+*.log

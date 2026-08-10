@@ -96,11 +96,13 @@ Then **open a fresh shell** (PATH update) and verify: `go version` → expect `g
 go mod init github.com/ShukunCheng/Crema
 ```
 
-`.gitignore`:
+`.gitignore` — the patterns MUST be root-anchored with a leading `/`. An unanchored
+`crema` matches any file *or directory* named `crema` at any depth, which silently
+excludes the entire `cmd/crema/` source directory from git:
 ```
-crema
-crema.exe
-dist/
+/crema
+/crema.exe
+/dist/
 *.log
 ```
 
