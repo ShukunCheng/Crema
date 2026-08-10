@@ -112,6 +112,10 @@ func NewApp(reg *agent.Registry, cur agent.Agent, dir string) *App {
 	a.tl.Append(Block{Kind: BlockSystem, Text: fmt.Sprintf(
 		"crema · %s · %s · every command and edit is shown in full",
 		cur.Label(), permissionNote(cur))})
+	// Render a real frame from the start. Terminals send a WindowSizeMsg
+	// immediately, but a pipe or an odd SSH client may not, and a bare
+	// placeholder would be all the user ever sees.
+	a.resize(80, 24)
 	return a
 }
 
