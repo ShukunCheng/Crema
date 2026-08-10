@@ -1,6 +1,6 @@
 # Crema M1 MVP Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+Work through the tasks in order. Each one ends with passing tests and a commit.
 
 **Goal:** A working `crema` TUI that drives Claude Code and Codex through their official headless CLIs (subscription auth, zero API keys), renders every tool call and output fully expanded in a left timeline, and keeps a live git diff panel on the right — covering the spec's M0 (rebuild from scratch; the prototype code is not in this repo) plus all of M1 (Codex adapter, agent hot-switch, diff auto-refresh, turn cancel, error handling, README).
 
