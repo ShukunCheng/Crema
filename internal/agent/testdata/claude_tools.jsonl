@@ -1,0 +1,8 @@
+{"type":"system","subtype":"init","cwd":"/tmp/demo","session_id":"aaaa-1111","model":"claude-fable-5","permissionMode":"acceptEdits","uuid":"u1"}
+{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"Creating the file now."}]},"session_id":"aaaa-1111","uuid":"u2"}
+{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"echo hi > hi.txt","description":"Create hi.txt"}}]},"session_id":"aaaa-1111","uuid":"u3"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"","is_error":false}]},"session_id":"aaaa-1111","uuid":"u4"}
+{"type":"assistant","message":{"id":"msg_2","role":"assistant","content":[{"type":"tool_use","id":"toolu_02","name":"Read","input":{"file_path":"/tmp/demo/hi.txt"}}]},"session_id":"aaaa-1111","uuid":"u5"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_02","content":[{"type":"text","text":"hi"}],"is_error":false}]},"session_id":"aaaa-1111","uuid":"u6"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_99","content":[{"type":"text","text":"command not found: frobnicate"}],"is_error":true}]},"session_id":"aaaa-1111","uuid":"u7"}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":9000,"num_turns":2,"result":"Created hi.txt","session_id":"aaaa-1111","total_cost_usd":0.05,"usage":{"input_tokens":10,"output_tokens":99}}

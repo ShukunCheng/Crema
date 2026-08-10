@@ -1,0 +1,7 @@
+{"id":"0","msg":{"type":"task_started"}}
+{"id":"0","msg":{"type":"agent_reasoning","text":"Thinking about it"}}
+{"id":"0","msg":{"type":"agent_message","message":"Hello from legacy codex"}}
+{"id":"0","msg":{"type":"exec_command_begin","call_id":"c1","command":["bash","-lc","ls"],"cwd":"/tmp"}}
+{"id":"0","msg":{"type":"exec_command_end","call_id":"c1","stdout":"a.txt\n","stderr":"","exit_code":0}}
+{"id":"0","msg":{"type":"token_count","input_tokens":100,"output_tokens":20}}
+{"id":"0","msg":{"type":"task_complete","last_agent_message":"done"}}

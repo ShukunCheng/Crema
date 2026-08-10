@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"019feacf-f403-7f90-a8d0-d5ca79578c8c"}
+{"type":"turn.started"}
+{"type":"error","message":"{\"detail\":\"The 'gpt-5.2-codex' model is not supported when using Codex with a ChatGPT account.\"}"}
+{"type":"turn.failed","error":{"message":"{\"detail\":\"The 'gpt-5.2-codex' model is not supported when using Codex with a ChatGPT account.\"}"}}

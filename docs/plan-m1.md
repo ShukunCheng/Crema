@@ -2238,8 +2238,16 @@ go get github.com/charmbracelet/lipgloss@v1.1.0
 go get github.com/charmbracelet/bubbletea@v1.3.10
 go get github.com/charmbracelet/bubbles@v0.21.0
 go get github.com/muesli/termenv@latest
-go get github.com/charmbracelet/x/ansi@latest
+go get github.com/charmbracelet/x/ansi@v0.10.1
 ```
+
+**Pin `x/ansi` to v0.10.1 — do not use `@latest`.** v0.11.x renamed methods on
+`ansi.Style` (`Italic()` → `Italic(bool)`, dropped `SlowBlink`/`DoubleUnderline`),
+which breaks `x/cellbuf`, a transitive dependency of lipgloss v1.1.0. The failure
+appears as a wall of compile errors inside the module cache, not in your own code.
+
+Note that `go get` on bubbles/bubbletea raises the `go.mod` directive to 1.24.x,
+so CI must pin Go 1.24 (not 1.23).
 
 (Task 10+ need bubbletea/bubbles; installing now keeps `go.mod` churn in one commit. Verify none of these resolved to a v2 pre-release: `go list -m all | grep charmbracelet` must show v1.x for bubbletea and lipgloss.)
 

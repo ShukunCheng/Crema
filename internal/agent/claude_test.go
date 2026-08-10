@@ -1,0 +1,62 @@
+package agent
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestClaudeArgs(t *testing.T) {
+	c := NewClaude()
+	got := c.args(RunOptions{Prompt: "fix the bug"})
+	want := []string{"-p", "fix the bug", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"}
+	if len(got) != len(want) {
+		t.Fatalf("args = %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("args = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestClaudeArgsResume(t *testing.T) {
+	c := NewClaude()
+	got := c.args(RunOptions{Prompt: "continue", SessionID: "sid-1"})
+	last2 := got[len(got)-2:]
+	if last2[0] != "--resume" || last2[1] != "sid-1" {
+		t.Fatalf("resume args missing: %v", got)
+	}
+}
+
+func TestClaudeRunAgainstFakeBinary(t *testing.T) {
+	src, err := os.ReadFile("testdata/claude_tools.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(t.TempDir(), "f.jsonl")
+	if err := os.WriteFile(fixture, src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClaude()
+	c.bin = os.Args[0]
+	c.extraEnv = fakeEnv("stream", "CREMA_FAKE_FIXTURE="+fixture)
+	ch, err := c.Run(context.Background(), RunOptions{Prompt: "x", Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+	last := evs[len(evs)-1]
+	if last.Kind != KindTurnEnd || last.Result.SessionID != "aaaa-1111" || last.Result.CostUSD != 0.05 {
+		t.Fatalf("end: %+v", last)
+	}
+}
+
+func TestClaudeUnavailableWhenBinaryMissing(t *testing.T) {
+	c := NewClaude()
+	c.bin = "definitely-not-a-real-binary-xyz"
+	if c.Available() == nil {
+		t.Fatal("want availability error")
+	}
+}
