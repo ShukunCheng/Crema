@@ -60,6 +60,16 @@ func (t *Timeline) SetSize(w, h int) {
 
 func (t *Timeline) Len() int { return len(t.blocks) }
 
+// Invalidate re-renders every block. Needed after a theme change, since the
+// rendered text carries the old palette's escape codes.
+func (t *Timeline) Invalidate() {
+	t.rendered = t.rendered[:0]
+	for _, b := range t.blocks {
+		t.rendered = append(t.rendered, renderBlock(b, t.width))
+	}
+	t.sync()
+}
+
 func (t *Timeline) Following() bool { return t.follow }
 
 func (t *Timeline) Append(b Block) {

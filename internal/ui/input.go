@@ -26,11 +26,21 @@ func NewInput(w int) *Input {
 	// Enter is reserved for "send" by the app; newline moves to alt+enter/ctrl+j.
 	ta.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("alt+enter", "ctrl+j"), key.WithHelp("alt+enter", "newline"))
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(T.Pink)
-	ta.BlurredStyle.Prompt = lipgloss.NewStyle().Foreground(T.Muted)
 	ta.Focus()
-	return &Input{ta: ta, width: max(1, w)}
+	i := &Input{ta: ta, width: max(1, w)}
+	i.ApplyTheme()
+	return i
+}
+
+// ApplyTheme re-reads the active palette; call it after a theme change.
+func (i *Input) ApplyTheme() {
+	i.ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	i.ta.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(T.Pink)
+	i.ta.FocusedStyle.Text = lipgloss.NewStyle().Foreground(T.Fg)
+	i.ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(T.Muted)
+	i.ta.BlurredStyle.Prompt = lipgloss.NewStyle().Foreground(T.Muted)
+	i.ta.BlurredStyle.Text = lipgloss.NewStyle().Foreground(T.Muted)
+	i.ta.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(T.Muted)
 }
 
 func (i *Input) SetWidth(w int) {

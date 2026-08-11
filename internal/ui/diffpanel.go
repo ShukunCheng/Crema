@@ -137,6 +137,13 @@ func (d *DiffPanel) SetDiff(ds gitdiff.DiffSet) {
 	d.vp.SetYOffset(off)
 }
 
+// Invalidate re-renders the current diff, e.g. after a theme change.
+func (d *DiffPanel) Invalidate() {
+	off := d.vp.YOffset
+	d.vp.SetContent(RenderDiffSet(d.ds, d.width))
+	d.vp.SetYOffset(off)
+}
+
 func (d *DiffPanel) Update(msg tea.Msg) tea.Cmd {
 	// The viewport's keymap has no home/end bindings, so handle them here.
 	if k, ok := msg.(tea.KeyMsg); ok {

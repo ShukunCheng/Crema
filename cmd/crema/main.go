@@ -16,6 +16,7 @@ func main() {
 	agentName := flag.String("agent", "", "agent to start with: claude | codex | mock (default: first available)")
 	dir := flag.String("dir", ".", "working directory the agent runs in")
 	doctor := flag.Bool("doctor", false, "check the environment and exit")
+	theme := flag.String("theme", "auto", "color theme: auto | light | dark (toggle at runtime with ctrl+l)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -42,6 +43,16 @@ func main() {
 	cur, err := pick(reg, *agentName)
 	if err != nil {
 		fail(err)
+	}
+	switch *theme {
+	case "light":
+		ui.SetMode(ui.ModeLight)
+	case "dark":
+		ui.SetMode(ui.ModeDark)
+	case "auto", "":
+		ui.SetMode(ui.DetectMode()) // asks the terminal about its background
+	default:
+		fail(fmt.Errorf("unknown theme %q (want auto, light, or dark)", *theme))
 	}
 
 	p := tea.NewProgram(ui.NewApp(reg, cur, abs), tea.WithAltScreen(), tea.WithMouseCellMotion())

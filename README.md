@@ -8,6 +8,11 @@ Everything the agent does — every command, every edit, every tool result — i
 rendered **fully expanded**. Nothing is folded into a card you have to click.
 A live `git diff` panel sits on the right and refreshes as the agent works.
 
+Open as many agents as you like. Each one has its own backend, its own working
+directory, and its own conversation, and they **run at the same time** — fire off
+a refactor in one project, switch to another agent while it works, and come back
+when the sidebar says it's done.
+
 ## Quickstart (under two minutes)
 
 1. Install and sign in to at least one agent CLI (crema never handles credentials):
@@ -32,23 +37,66 @@ the interface without spending anything.
 
 | Key | Action |
 |---|---|
-| `enter` | send the message |
+| `enter` | send the message to the focused agent |
 | `alt+enter` / `ctrl+j` | newline |
-| `esc` | cancel the running turn |
-| `tab` | switch agent (between turns) |
+| `esc` | cancel the focused agent's turn (others keep running) |
+| `ctrl+n` | new agent — pick a backend, then browse to a working directory |
+| `ctrl+w` | close the focused agent (closing the last one quits) |
+| `tab` / `shift+tab` | next / previous agent |
+| `alt+1` … `alt+9` | jump straight to that agent |
+| `ctrl+b` | show/hide the agent sidebar |
 | `ctrl+t` | show/hide the diff pane |
+| `ctrl+l` | switch between light and dark |
 | `ctrl+r` | refresh the diff now |
 | `ctrl+o` | move focus: input → timeline → diff |
 | `pgup` / `pgdn` / `home` / `end` | scroll the focused pane |
 | `ctrl+c` | quit |
 
-The diff pane hides automatically below 100 columns; crema stays usable at 80×24.
+Panes drop away as the terminal narrows so crema stays usable at 80×24: the diff
+pane needs 124 columns, the sidebar needs 70. Above those floors `ctrl+t` and
+`ctrl+b` decide. When the sidebar is hidden, the status bar still shows which
+agent you're on and how many are running, e.g. `Claude Code [2/3] · 1 running`.
+
+## Multiple agents
+
+`ctrl+n` opens a two-step picker: choose a backend, then browse to the folder
+that agent should work in. The browser is plain terminal UI rather than a native
+dialog, so it still works over SSH — `↑↓` to move, `enter` to open a folder,
+`←` to go up, and the `[ use this directory ]` row to accept the current one.
+
+Because each agent owns a directory, giving two agents separate projects (or
+separate clones) keeps their edits from colliding. Pointing two agents at the
+same directory is allowed, but they will overwrite each other's work without
+warning — crema does not arbitrate.
+
+The sidebar lists every open agent with its live state, so you can see at a
+glance which ones are still working:
+
+```
+╭──────────────────────╮
+│AGENTS                │
+│▸ 1 claude · api  ⣾ 7s│
+│  2 codex · web   idle│
+│  3 claude · docs ⣷12s│
+│                      │
+│+ new agent  ^n       │
+╰──────────────────────╯
+```
+
+## Themes
+
+Crema ships a pink/purple palette in both light and dark. It picks one by asking
+your terminal about its background at startup; override with `--theme light` or
+`--theme dark`, and flip at any time with `ctrl+l`.
 
 ## Flags
 
 ```
-crema [--agent claude|codex|mock] [--dir PATH] [--doctor] [--version]
+crema [--agent claude|codex|mock] [--dir PATH] [--theme auto|light|dark]
+      [--doctor] [--version]
 ```
+
+`--agent` and `--dir` set up the first agent; everything after that is `ctrl+n`.
 
 ## How it works
 

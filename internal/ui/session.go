@@ -1,0 +1,148 @@
+package ui
+
+import (
+	"context"
+	"path/filepath"
+	"time"
+
+	"github.com/ShukunCheng/Crema/internal/agent"
+	"github.com/ShukunCheng/Crema/internal/gitdiff"
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+// Session is one open agent: a backend bound to a working directory, with its
+// own conversation, its own diff pane, and its own in-flight turn. Sessions run
+// concurrently — every message carries the session id it belongs to so events
+// from a background agent land in the right timeline.
+type Session struct {
+	ID      int
+	Backend agent.Agent
+	Dir     string
+
+	tl *Timeline
+	dp *DiffPanel
+
+	busy      bool
+	turnStart time.Time
+	stream    <-chan agent.Event
+	streamSeq int
+	cancel    context.CancelFunc
+	agentSID  string // backend session id, for resume
+	cost      float64
+	lastOpts  agent.RunOptions
+
+	diff        gitdiff.DiffSet
+	diffSeq     int
+	diffApplied int
+}
+
+func NewSession(id int, backend agent.Agent, dir string) *Session {
+	s := &Session{
+		ID:      id,
+		Backend: backend,
+		Dir:     dir,
+		tl:      NewTimeline(80, 20),
+		dp:      NewDiffPanel(40, 20),
+	}
+	s.tl.Append(Block{Kind: BlockSystem, Text: backend.Label() + " · " + permissionNote(backend) +
+		"\nworking in " + dir})
+	return s
+}
+
+// Title is the sidebar label: backend plus the directory's last element.
+func (s *Session) Title() string {
+	base := filepath.Base(s.Dir)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		base = s.Dir
+	}
+	return s.Backend.Name() + " · " + base
+}
+
+func (s *Session) Busy() bool { return s.busy }
+
+// Elapsed is how long the current turn has been running (0 when idle).
+func (s *Session) Elapsed() time.Duration {
+	if !s.busy {
+		return 0
+	}
+	return time.Since(s.turnStart)
+}
+
+func (s *Session) SetSize(timelineW, diffW, paneH int) {
+	s.tl.SetSize(timelineW, paneH)
+	if diffW > 0 {
+		s.dp.SetSize(diffW-2, paneH-2) // inside the rounded border
+	}
+}
+
+// startTurn spawns the backend. Returns nil when the agent is unavailable,
+// having already reported the reason into the timeline.
+func (s *Session) startTurn(prompt string) tea.Cmd {
+	if err := s.Backend.Available(); err != nil {
+		s.tl.Append(Block{Kind: BlockError, Text: err.Error()})
+		return nil
+	}
+	s.tl.Append(Block{Kind: BlockUser, Text: prompt})
+	s.streamSeq++
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+	s.busy = true
+	s.turnStart = time.Now()
+	s.lastOpts = agent.RunOptions{Prompt: prompt, Dir: s.Dir, SessionID: s.agentSID}
+	return startStream(s.Backend, ctx, s.lastOpts, s.ID, s.streamSeq)
+}
+
+func (s *Session) endTurn(r *agent.TurnResult) {
+	s.busy = false
+	s.stream = nil
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	if r != nil {
+		if r.SessionID != "" {
+			s.agentSID = r.SessionID
+		}
+		s.cost += r.CostUSD
+	}
+}
+
+// cancelTurn stops an in-flight turn; the adapter still delivers a final
+// canceled TurnEnd, which is what flips busy back off.
+func (s *Session) cancelTurn() bool {
+	if !s.busy || s.cancel == nil {
+		return false
+	}
+	s.cancel()
+	s.tl.Append(Block{Kind: BlockSystem, Text: "canceling the current turn…"})
+	return true
+}
+
+// close cancels any running turn and drains the stream so its goroutine ends.
+func (s *Session) close() {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	if s.stream != nil {
+		go drain(s.stream)
+		s.stream = nil
+	}
+	s.busy = false
+}
+
+func (s *Session) collectDiff() tea.Cmd {
+	s.diffSeq++
+	seq, dir, id := s.diffSeq, s.Dir, s.ID
+	return func() tea.Msg { return diffMsg{sess: id, seq: seq, ds: gitdiff.Collect(dir)} }
+}
+
+// scheduleDiff debounces refreshes: only the newest schedule survives, so a
+// burst of edits costs one `git diff` instead of one per file.
+func (s *Session) scheduleDiff() tea.Cmd {
+	s.diffSeq++
+	seq, id := s.diffSeq, s.ID
+	return tea.Tick(diffDebounce, func(time.Time) tea.Msg {
+		return diffTickMsg{sess: id, seq: seq}
+	})
+}
