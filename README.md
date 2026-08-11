@@ -112,6 +112,10 @@ Crema ships a pink/purple palette in both light and dark. It picks one by asking
 your terminal about its background at startup; override with `--theme light` or
 `--theme dark`.
 
+Both themes paint their own background across the whole screen rather than
+letting your terminal's show through, so dark mode is genuinely dark even in a
+light terminal — and stays readable either way.
+
 To switch while running, click the chip at the right end of the status bar or
 press `ctrl+l`. The chip always shows the current mode and is the last thing the
 status bar gives up as the terminal narrows, so it stays reachable:

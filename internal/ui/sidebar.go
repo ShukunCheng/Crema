@@ -57,11 +57,11 @@ func RenderSidebar(sessions []*Session, active int, spin string, w, h int) strin
 	if w <= 0 || h <= 0 {
 		return ""
 	}
-	title := lipgloss.NewStyle().Foreground(T.Magenta).Bold(true)
-	sel := lipgloss.NewStyle().Foreground(T.Pink).Bold(true)
-	idle := lipgloss.NewStyle().Foreground(T.Lilac)
-	run := lipgloss.NewStyle().Foreground(T.Green)
-	dim := lipgloss.NewStyle().Foreground(T.Muted)
+	title := fg(T.Magenta).Bold(true).Width(w)
+	sel := fg(T.Pink).Bold(true).Width(w)
+	idle := fg(T.Lilac).Width(w)
+	run := fg(T.Green).Width(w)
+	dim := fg(T.Muted).Width(w)
 
 	lines := []string{title.Render(clip("AGENTS", w))}
 	for i, s := range sessions {

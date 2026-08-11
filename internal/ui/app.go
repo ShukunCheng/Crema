@@ -106,7 +106,7 @@ type App struct {
 // NewApp opens a single session for cur in dir; more are added with ctrl+n.
 func NewApp(reg *agent.Registry, cur agent.Agent, dir string) *App {
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
-	sp.Style = lipgloss.NewStyle().Foreground(T.Pink)
+	sp.Style = fg(T.Pink)
 	a := &App{
 		reg: reg, in: NewInput(80), sp: sp,
 		wantSidebar: true, wantDiff: true,
@@ -390,7 +390,7 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // applyTheme re-renders everything that caches styled text.
 func (a *App) applyTheme() {
-	a.sp.Style = lipgloss.NewStyle().Foreground(T.Pink)
+	a.sp.Style = fg(T.Pink)
 	a.in.ApplyTheme()
 	for _, s := range a.sessions {
 		s.tl.Invalidate()
@@ -568,15 +568,15 @@ func (a *App) View() string {
 	}
 	if a.picker != nil {
 		modal := a.picker.View(min(a.w, 72), a.lay.PaneH+InputHeight)
-		modal = lipgloss.PlaceHorizontal(a.w, lipgloss.Center, modal)
+		modal = lipgloss.PlaceHorizontal(a.w, lipgloss.Center, modal,
+			lipgloss.WithWhitespaceBackground(T.Bg))
 		return modal + "\n" + a.statusLine()
 	}
 
 	s := a.cur()
 	var panes []string
 	if a.lay.ShowSidebar {
-		panes = append(panes, lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).BorderForeground(T.Muted).
+		panes = append(panes, pane(T.Muted).
 			Width(a.lay.SidebarW-2).Height(a.lay.PaneH-2).
 			Render(RenderSidebar(a.sessions, a.active, a.sp.View(), a.lay.SidebarW-2, a.lay.PaneH-2)))
 	}
@@ -587,8 +587,7 @@ func (a *App) View() string {
 			if a.focus == focusDiff {
 				c = T.Purple
 			}
-			panes = append(panes, lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).BorderForeground(c).
+			panes = append(panes, pane(c).
 				Width(a.lay.DiffW-2).Height(a.lay.PaneH-2).
 				Render(s.dp.View()))
 		}

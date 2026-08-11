@@ -9,7 +9,6 @@ import (
 
 	"github.com/ShukunCheng/Crema/internal/agent"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type pickerStage int
@@ -269,10 +268,10 @@ func (p *Picker) View(w, h int) string {
 	// Clipping to anything wider than inner would wrap and add a line.
 	inner := w - 4
 	content := h - 2
-	head := lipgloss.NewStyle().Foreground(T.Pink).Bold(true)
-	dim := lipgloss.NewStyle().Foreground(T.Muted)
-	selSty := lipgloss.NewStyle().Foreground(T.Pink).Bold(true)
-	warnSty := lipgloss.NewStyle().Foreground(T.Yellow)
+	headSty := fg(T.Pink).Bold(true).Width(inner)
+	dim := fg(T.Muted).Width(inner)
+	selSty := fg(T.Pink).Bold(true).Width(inner)
+	warnSty := fg(T.Yellow).Width(inner)
 
 	// footer is the warning (if any) plus a blank line and the help line
 	footer := []string{"", dim.Render(clip(p.help(), inner))}
@@ -282,7 +281,7 @@ func (p *Picker) View(w, h int) string {
 
 	var lines []string
 	if p.stage == stageBackend {
-		lines = append(lines, head.Render(clip("new agent — pick a backend", inner)), "")
+		lines = append(lines, headSty.Render(clip("new agent — pick a backend", inner)), "")
 		for i, ba := range p.backends {
 			label := ba.Label()
 			if ba.Available() != nil {
@@ -294,12 +293,12 @@ func (p *Picker) View(w, h int) string {
 			case ba.Available() != nil:
 				lines = append(lines, dim.Render(clip("  "+label, inner)))
 			default:
-				lines = append(lines, clip("  "+label, inner))
+				lines = append(lines, base().Width(inner).Render(clip("  "+label, inner)))
 			}
 		}
 	} else {
 		lines = append(lines,
-			head.Render(clip("new "+p.chosen.Label()+" — pick a working directory", inner)),
+			headSty.Render(clip("new "+p.chosen.Label()+" — pick a working directory", inner)),
 			dim.Render(clip(p.dir, inner)), "")
 		rows := max(1, content-len(lines)-len(footer))
 		if p.dIdx < p.scroll {
@@ -320,7 +319,7 @@ func (p *Picker) View(w, h int) string {
 			if i == p.dIdx {
 				lines = append(lines, selSty.Render(clip("▸ "+label, inner)))
 			} else {
-				lines = append(lines, clip("  "+label, inner))
+				lines = append(lines, base().Width(inner).Render(clip("  "+label, inner)))
 			}
 		}
 	}
@@ -338,9 +337,7 @@ func (p *Picker) View(w, h int) string {
 		lines = append(lines, "")
 	}
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).BorderForeground(T.Purple).
-		Padding(0, 1).
+	return pane(T.Purple).Padding(0, 1).
 		Width(w - 2).Height(content).
 		Render(strings.Join(lines, "\n"))
 }

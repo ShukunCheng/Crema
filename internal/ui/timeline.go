@@ -7,7 +7,6 @@ import (
 	"github.com/ShukunCheng/Crema/internal/agent"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type BlockKind int
@@ -58,6 +57,7 @@ type Timeline struct {
 
 func NewTimeline(w, h int) *Timeline {
 	vp := viewport.New(max(1, w), max(1, h))
+	vp.Style = base() // paint the theme behind the empty rows too
 	return &Timeline{vp: vp, width: max(1, w), follow: true}
 }
 
@@ -79,6 +79,7 @@ func (t *Timeline) Len() int { return len(t.blocks) }
 // Invalidate re-renders every block. Needed after a theme change, since the
 // rendered text carries the old palette's escape codes.
 func (t *Timeline) Invalidate() {
+	t.vp.Style = base()
 	t.rendered = t.rendered[:0]
 	for _, b := range t.blocks {
 		t.rendered = append(t.rendered, renderBlock(b, t.width))
@@ -195,17 +196,17 @@ func renderBlock(b Block, w int) string {
 func renderCollapsed(b Block, w int) string {
 	full := strings.TrimRight(renderExpanded(b, w), "\n")
 	hidden := strings.Count(full, "\n") + 1
-	head := "output"
+	h := "output"
 	switch b.Kind {
 	case BlockTool:
-		head = "⏵ " + b.Name
+		h = "⏵ " + b.Name
 	case BlockThinking:
-		head = "✳ thinking"
+		h = "✳ thinking"
 	case BlockError:
-		head = "✖ error"
+		h = "✖ error"
 	}
-	label := fmt.Sprintf("▸ %s — %d lines hidden, click to expand", head, hidden)
-	return lipgloss.NewStyle().Foreground(T.Yellow).Width(max(1, w)).Render(label) + "\n"
+	label := fmt.Sprintf("▸ %s — %d lines hidden, click to expand", h, hidden)
+	return fg(T.Yellow).Width(max(1, w)).Render(label) + "\n"
 }
 
 func renderExpanded(b Block, w int) string {

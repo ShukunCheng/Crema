@@ -12,16 +12,23 @@ import (
 // visible, counted label — crema never folds output silently.
 const MaxOutputLines = 4000
 
+// body wraps text to w and pads every line to w, so the theme background
+// covers the full row rather than stopping at the end of the text.
 func body(w int) lipgloss.Style {
-	return lipgloss.NewStyle().Width(max(1, w))
+	return base().Width(max(1, w))
+}
+
+// head is a one-line, full-width heading.
+func head(text string, w int, c lipgloss.Color) string {
+	return fg(c).Bold(true).Width(max(1, w)).Render(text)
 }
 
 // rail prefixes every line with a colored vertical guide.
 func rail(s string, c lipgloss.Color) string {
-	bar := lipgloss.NewStyle().Foreground(c).Render("│")
+	bar := fg(c).Render("│ ")
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	for i, ln := range lines {
-		lines[i] = bar + " " + ln
+		lines[i] = bar + ln
 	}
 	return strings.Join(lines, "\n")
 }
@@ -36,8 +43,7 @@ func Truncate(s string, maxLines int) (string, int) {
 }
 
 func RenderUser(text string, w int) string {
-	head := lipgloss.NewStyle().Foreground(T.Pink).Bold(true).Render("❯ you")
-	return head + "\n" + body(w).Foreground(T.Fg).Render(text) + "\n"
+	return head("❯ you", w, T.Pink) + "\n" + body(w).Foreground(T.Fg).Render(text) + "\n"
 }
 
 func RenderAssistant(text string, w int) string {
@@ -45,41 +51,40 @@ func RenderAssistant(text string, w int) string {
 }
 
 func RenderThinking(text string, w int) string {
-	head := lipgloss.NewStyle().Foreground(T.Muted).Italic(true).Render("✳ thinking")
 	txt := body(max(1, w-2)).Foreground(T.Muted).Italic(true).Render(text)
-	return head + "\n" + rail(txt, T.Muted) + "\n"
+	return fg(T.Muted).Italic(true).Width(max(1, w)).Render("✳ thinking") + "\n" +
+		rail(txt, T.Muted) + "\n"
 }
 
 func RenderTool(name, input string, w int) string {
-	head := lipgloss.NewStyle().Foreground(T.Purple).Bold(true).Render("⏵ " + name)
+	h := head("⏵ "+name, w, T.Purple)
 	if strings.TrimSpace(input) == "" {
-		return head + "\n"
+		return h + "\n"
 	}
 	txt := body(max(1, w-2)).Foreground(T.Lilac).Render(input)
-	return head + "\n" + rail(txt, T.Purple) + "\n"
+	return h + "\n" + rail(txt, T.Purple) + "\n"
 }
 
 func RenderToolOutput(content string, isErr bool, w int) string {
-	fg, railC := T.Muted, T.Purple
+	fgc, railC := T.Muted, T.Purple
 	if isErr {
-		fg, railC = T.Red, T.Red
+		fgc, railC = T.Red, T.Red
 	}
 	shown, cut := Truncate(content, MaxOutputLines)
 	if strings.TrimSpace(shown) == "" && cut == 0 {
-		return rail(lipgloss.NewStyle().Foreground(T.Muted).Render("(no output)"), railC) + "\n"
+		return rail(body(max(1, w-2)).Foreground(T.Muted).Render("(no output)"), railC) + "\n"
 	}
-	txt := body(max(1, w-2)).Foreground(fg).Render(shown)
+	txt := body(max(1, w-2)).Foreground(fgc).Render(shown)
 	if cut > 0 {
 		label := fmt.Sprintf("… +%d lines truncated (crema cap %d)", cut, MaxOutputLines)
-		txt += "\n" + lipgloss.NewStyle().Foreground(T.Yellow).Bold(true).Render(label)
+		txt += "\n" + body(max(1, w-2)).Foreground(T.Yellow).Bold(true).Render(label)
 	}
 	return rail(txt, railC) + "\n"
 }
 
 func RenderError(text string, w int) string {
-	head := lipgloss.NewStyle().Foreground(T.Red).Bold(true).Render("✖ error")
 	txt := body(max(1, w-2)).Foreground(T.Red).Render(text)
-	return head + "\n" + rail(txt, T.Red) + "\n"
+	return head("✖ error", w, T.Red) + "\n" + rail(txt, T.Red) + "\n"
 }
 
 func RenderSystem(text string, w int) string {
@@ -105,6 +110,5 @@ func RenderStats(r *agent.TurnResult, w int) string {
 	case r.Err != "":
 		mark, c = "✖ failed", T.Red
 	}
-	line := mark + " " + strings.Join(segs, " · ")
-	return body(w).Foreground(c).Render(line) + "\n"
+	return body(w).Foreground(c).Render(mark+" "+strings.Join(segs, " · ")) + "\n"
 }

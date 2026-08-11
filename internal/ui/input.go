@@ -4,7 +4,6 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // InputHeight is the total rows the input box occupies (border + one row).
@@ -34,13 +33,16 @@ func NewInput(w int) *Input {
 
 // ApplyTheme re-reads the active palette; call it after a theme change.
 func (i *Input) ApplyTheme() {
-	i.ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	i.ta.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(T.Pink)
-	i.ta.FocusedStyle.Text = lipgloss.NewStyle().Foreground(T.Fg)
-	i.ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(T.Muted)
-	i.ta.BlurredStyle.Prompt = lipgloss.NewStyle().Foreground(T.Muted)
-	i.ta.BlurredStyle.Text = lipgloss.NewStyle().Foreground(T.Muted)
-	i.ta.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(T.Muted)
+	for _, s := range []*textarea.Style{&i.ta.FocusedStyle, &i.ta.BlurredStyle} {
+		s.Base = base()
+		s.CursorLine = base()
+		s.Text = fg(T.Fg)
+		s.Placeholder = fg(T.Muted)
+		s.EndOfBuffer = base()
+		s.Prompt = fg(T.Muted)
+	}
+	i.ta.FocusedStyle.Prompt = fg(T.Pink)
+	i.ta.BlurredStyle.Text = fg(T.Muted)
 }
 
 func (i *Input) SetWidth(w int) {
@@ -65,8 +67,5 @@ func (i *Input) View() string {
 	if !i.ta.Focused() {
 		c = T.Muted
 	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).BorderForeground(c).
-		Width(max(1, i.width-2)).
-		Render(i.ta.View())
+	return pane(c).Width(max(1, i.width-2)).Render(i.ta.View())
 }

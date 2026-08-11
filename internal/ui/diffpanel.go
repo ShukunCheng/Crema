@@ -59,9 +59,9 @@ func renderDiffRows(ds gitdiff.DiffSet, w int, collapsed map[string]bool) []diff
 	if w <= 0 {
 		return nil
 	}
-	dim := lipgloss.NewStyle().Foreground(T.Muted)
+	dim := fg(T.Muted).Width(w)
 	if ds.Err != "" {
-		return []diffRow{{text: lipgloss.NewStyle().Foreground(T.Yellow).Render(clip(ds.Err, w))}}
+		return []diffRow{{text: fg(T.Yellow).Width(w).Render(clip(ds.Err, w))}}
 	}
 	if len(ds.Files) == 0 {
 		return []diffRow{{text: dim.Render(clip("working tree clean", w))}}
@@ -85,7 +85,7 @@ func renderDiffRows(ds gitdiff.DiffSet, w int, collapsed map[string]bool) []diff
 		if len(files) == 0 {
 			continue
 		}
-		rows = append(rows, diffRow{text: lipgloss.NewStyle().Foreground(T.Magenta).Bold(true).
+		rows = append(rows, diffRow{text: fg(T.Magenta).Bold(true).Width(w).
 			Render(clip("── "+sec.title+" ", w))})
 		for _, f := range files {
 			rows = append(rows, renderDiffFile(f, w, collapsed[DiffFileKey(f)])...)
@@ -104,16 +104,16 @@ func renderDiffFile(f gitdiff.File, w int, folded bool) []diffRow {
 	if folded {
 		marker = "▸"
 	}
-	head := fmt.Sprintf("%s %s %s  +%d −%d", marker, statusGlyph(f.Status), name, f.Additions, f.Deletions)
+	headTxt := fmt.Sprintf("%s %s %s  +%d −%d", marker, statusGlyph(f.Status), name, f.Additions, f.Deletions)
 	rows := []diffRow{{
-		text:   lipgloss.NewStyle().Foreground(T.Pink).Bold(true).Render(clip(head, w)),
+		text:   fg(T.Pink).Bold(true).Width(w).Render(clip(headTxt, w)),
 		file:   key,
 		header: true,
 	}}
 
-	body := func(s string) diffRow { return diffRow{text: s, file: key} }
+	bodyRow := func(s string) diffRow { return diffRow{text: s, file: key} }
 	if f.Note != "" {
-		rows = append(rows, body(lipgloss.NewStyle().Foreground(T.Yellow).Render(clip("  "+f.Note, w))))
+		rows = append(rows, bodyRow(fg(T.Yellow).Width(w).Render(clip("  "+f.Note, w))))
 	}
 	if folded {
 		hidden := 0
@@ -121,26 +121,26 @@ func renderDiffFile(f gitdiff.File, w int, folded bool) []diffRow {
 			hidden += 1 + len(h.Lines)
 		}
 		if hidden > 0 {
-			rows = append(rows, body(lipgloss.NewStyle().Foreground(T.Yellow).
+			rows = append(rows, bodyRow(fg(T.Yellow).Width(w).
 				Render(clip(fmt.Sprintf("  %d lines hidden, click to expand", hidden), w))))
 		}
 		return rows
 	}
 
-	add := lipgloss.NewStyle().Foreground(T.Green)
-	del := lipgloss.NewStyle().Foreground(T.Red)
-	ctx := lipgloss.NewStyle().Foreground(T.Muted)
-	hdr := lipgloss.NewStyle().Foreground(T.Purple)
+	add := fg(T.Green).Width(w)
+	del := fg(T.Red).Width(w)
+	ctx := fg(T.Muted).Width(w)
+	hdr := fg(T.Purple).Width(w)
 	for _, h := range f.Hunks {
-		rows = append(rows, body(hdr.Render(clip(h.Header, w))))
+		rows = append(rows, bodyRow(hdr.Render(clip(h.Header, w))))
 		for _, ln := range h.Lines {
 			switch ln.Kind {
 			case gitdiff.LineAdd:
-				rows = append(rows, body(add.Render(clip("+"+ln.Text, w))))
+				rows = append(rows, bodyRow(add.Render(clip("+"+ln.Text, w))))
 			case gitdiff.LineDel:
-				rows = append(rows, body(del.Render(clip("-"+ln.Text, w))))
+				rows = append(rows, bodyRow(del.Render(clip("-"+ln.Text, w))))
 			default:
-				rows = append(rows, body(ctx.Render(clip(" "+ln.Text, w))))
+				rows = append(rows, bodyRow(ctx.Render(clip(" "+ln.Text, w))))
 			}
 		}
 	}
@@ -175,6 +175,7 @@ func NewDiffPanel(w, h int) *DiffPanel {
 		vp: viewport.New(max(1, w), max(1, h)), width: max(1, w),
 		collapsed: map[string]bool{},
 	}
+	d.vp.Style = base() // paint the theme behind the empty rows too
 	d.render()
 	return d
 }
@@ -197,6 +198,7 @@ func (d *DiffPanel) SetDiff(ds gitdiff.DiffSet) {
 func (d *DiffPanel) Invalidate() { d.render() }
 
 func (d *DiffPanel) render() {
+	d.vp.Style = base()
 	off := d.vp.YOffset
 	d.rows = renderDiffRows(d.ds, d.width, d.collapsed)
 	d.vp.SetContent(joinRows(d.rows))

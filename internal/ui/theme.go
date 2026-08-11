@@ -8,7 +8,23 @@ import "github.com/charmbracelet/lipgloss"
 type Theme struct {
 	Pink, Magenta, Purple, Lilac, Muted, Fg lipgloss.Color
 	Green, Red, Yellow                      lipgloss.Color
-	Surface                                 lipgloss.Color
+	// Bg is painted behind every cell. Without it the terminal's own
+	// background shows through and switching modes only recolors text.
+	Bg      lipgloss.Color
+	Surface lipgloss.Color // status bar, set slightly off Bg
+}
+
+// base is the starting point for every style in the package: it paints the
+// theme background so no cell is left showing the terminal's own.
+func base() lipgloss.Style { return lipgloss.NewStyle().Background(T.Bg) }
+
+// fg is base plus a foreground color.
+func fg(c lipgloss.Color) lipgloss.Style { return base().Foreground(c) }
+
+// pane is a rounded box in theme colors, border included.
+func pane(border lipgloss.Color) lipgloss.Style {
+	return base().Border(lipgloss.RoundedBorder()).
+		BorderForeground(border).BorderBackground(T.Bg)
 }
 
 type Mode int
@@ -36,7 +52,8 @@ var DarkTheme = Theme{
 	Green:   lipgloss.Color("#8fe0a8"),
 	Red:     lipgloss.Color("#ff8f9e"),
 	Yellow:  lipgloss.Color("#ffd9a0"),
-	Surface: lipgloss.Color("#211a2b"),
+	Bg:      lipgloss.Color("#17121f"),
+	Surface: lipgloss.Color("#2a2136"),
 }
 
 // LightTheme keeps the same hues but darkens them enough to stay legible on a
@@ -51,7 +68,8 @@ var LightTheme = Theme{
 	Green:   lipgloss.Color("#1a6c39"),
 	Red:     lipgloss.Color("#b02b40"),
 	Yellow:  lipgloss.Color("#7a5400"),
-	Surface: lipgloss.Color("#ebe4f2"),
+	Bg:      lipgloss.Color("#faf7fd"),
+	Surface: lipgloss.Color("#e7dff0"),
 }
 
 // T is the active palette.
