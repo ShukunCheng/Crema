@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 func TestMain(m *testing.M) {
 	lipgloss.SetColorProfile(termenv.Ascii) // strip ANSI so assertions see plain text
+	bgWriter = io.Discard                   // keep OSC sequences out of test output
 	os.Exit(m.Run())
 }
 

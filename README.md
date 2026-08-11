@@ -116,6 +116,12 @@ Both themes paint their own background across the whole screen rather than
 letting your terminal's show through, so dark mode is genuinely dark even in a
 light terminal — and stays readable either way.
 
+Crema also asks the terminal to adopt the theme background as its default
+(OSC 11), so the emulator's own window padding matches instead of framing a dark
+theme in white, and hands the color back on exit. Terminals that don't implement
+that sequence ignore it; if yours does and crema is killed rather than quit, a
+new tab clears it.
+
 To switch while running, click the chip at the right end of the status bar or
 press `ctrl+l`. The chip always shows the current mode and is the last thing the
 status bar gives up as the terminal narrows, so it stays reachable:

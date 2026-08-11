@@ -390,6 +390,7 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // applyTheme re-renders everything that caches styled text.
 func (a *App) applyTheme() {
+	SyncTerminalBackground() // so the emulator's padding follows too
 	a.sp.Style = fg(T.Pink)
 	a.in.ApplyTheme()
 	for _, s := range a.sessions {

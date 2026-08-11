@@ -67,5 +67,6 @@ func (i *Input) View() string {
 	if !i.ta.Focused() {
 		c = T.Muted
 	}
-	return pane(c).Width(max(1, i.width-2)).Render(i.ta.View())
+	// keepBG because the textarea nests styles we don't control.
+	return pane(c).Width(max(1, i.width-2)).Render(keepBG(i.ta.View()))
 }

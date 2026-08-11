@@ -55,8 +55,12 @@ func main() {
 		fail(fmt.Errorf("unknown theme %q (want auto, light, or dark)", *theme))
 	}
 
+	ui.SyncTerminalBackground()
+	defer ui.ResetTerminalBackground() // don't leave the shell recolored
+
 	p := tea.NewProgram(ui.NewApp(reg, cur, abs), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
+		ui.ResetTerminalBackground()
 		fail(err)
 	}
 }

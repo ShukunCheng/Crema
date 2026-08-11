@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // Theme is the crema palette. Colors are read from the package-level T at
 // render time, so switching modes is a matter of reassigning it and asking the
@@ -25,6 +29,32 @@ func fg(c lipgloss.Color) lipgloss.Style { return base().Foreground(c) }
 func pane(border lipgloss.Color) lipgloss.Style {
 	return base().Border(lipgloss.RoundedBorder()).
 		BorderForeground(border).BorderBackground(T.Bg)
+}
+
+// keepBG re-establishes the theme background after every ANSI reset inside s.
+// Needed for output crema doesn't render itself — bubbles' textarea nests
+// styles, and lipgloss cannot restore a parent background once a nested style
+// resets, so everything after the reset falls back to the terminal's own
+// colors. That is what left a bar of terminal background in the input box.
+func keepBG(s string) string {
+	open := bgOpen()
+	if open == "" { // no-color profile: nothing to restore
+		return s
+	}
+	return strings.ReplaceAll(s, ansiReset, ansiReset+open) + ansiReset
+}
+
+const ansiReset = "\x1b[0m"
+
+// bgOpen is the escape sequence that switches the theme background on, read
+// back from lipgloss so it always matches the active profile and palette.
+func bgOpen() string {
+	const marker = "\x00"
+	r := base().Render(marker)
+	if i := strings.Index(r, marker); i > 0 {
+		return r[:i]
+	}
+	return ""
 }
 
 type Mode int
