@@ -105,18 +105,49 @@ type App struct {
 
 // NewApp opens a single session for cur in dir; more are added with ctrl+n.
 func NewApp(reg *agent.Registry, cur agent.Agent, dir string) *App {
+	a := newBareApp(reg)
+	a.addSession(cur, dir).introduce()
+	a.resize(80, 24)
+	return a
+}
+
+// NewAppRestored rebuilds the agents saved by a previous run, falling back to a
+// single session for cur in dir when there is nothing to restore.
+func NewAppRestored(reg *agent.Registry, st State, cur agent.Agent, dir string) *App {
+	a := newBareApp(reg)
+	n, skipped := a.RestoreSessions(st)
+	if n == 0 {
+		a.addSession(cur, dir).introduce()
+	}
+	for _, s := range skipped {
+		a.cur().tl.Append(Block{Kind: BlockError, Text: "could not restore " + s})
+	}
+	a.resize(80, 24)
+	return a
+}
+
+func newBareApp(reg *agent.Registry) *App {
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	sp.Style = fg(T.Pink)
-	a := &App{
+	return &App{
 		reg: reg, in: NewInput(80), sp: sp,
 		wantSidebar: true, wantDiff: true,
 	}
-	a.addSession(cur, dir)
-	// Render a real frame from the start. Terminals send a WindowSizeMsg
-	// immediately, but a pipe or an odd SSH client may not, and a bare
-	// placeholder would be all the user ever sees.
-	a.resize(80, 24)
-	return a
+	// Callers resize immediately: terminals send a WindowSizeMsg on startup,
+	// but a pipe or an odd SSH client may not, and a bare placeholder would
+	// be all the user ever sees.
+}
+
+// EnsureSession focuses an existing agent for backend+dir, or opens one. Used
+// when the user names --agent/--dir explicitly on a run that also restores.
+func (a *App) EnsureSession(backend agent.Agent, dir string) {
+	for i, s := range a.sessions {
+		if s.Backend.Name() == backend.Name() && s.Dir == dir {
+			a.active = i
+			return
+		}
+	}
+	a.addSession(backend, dir).introduce()
 }
 
 func (a *App) addSession(backend agent.Agent, dir string) *Session {
@@ -230,6 +261,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, s.scheduleDiff())
 		case agent.KindTurnEnd:
 			s.endTurn(msg.ev.Result)
+			a.persist() // a finished turn is worth surviving a crash
 			cmds = append(cmds, s.collectDiff())
 		}
 		return a, tea.Batch(cmds...)
@@ -295,9 +327,10 @@ func (a *App) finishPicker(done, canceled bool) tea.Cmd {
 	case done:
 		backend, dir := a.picker.Result()
 		a.picker = nil
-		s := a.addSession(backend, dir)
+		s := a.addSession(backend, dir).introduce()
 		a.resize(a.w, a.h)
 		a.note = ""
+		a.persist()
 		return tea.Batch(s.collectDiff(), a.in.Focus())
 	}
 	return nil
@@ -319,6 +352,7 @@ func isLeftClick(m tea.MouseMsg) bool {
 func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
+		a.persist()
 		for _, s := range a.sessions {
 			s.close()
 		}
@@ -350,6 +384,7 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+l":
 		ToggleMode() // the status-bar chip shows the result, so no note needed
 		a.applyTheme()
+		a.persist()
 		return a, nil
 	case "ctrl+r":
 		if s := a.cur(); s != nil {
@@ -418,12 +453,14 @@ func (a *App) closeSession() tea.Cmd {
 	s.close()
 	a.sessions = append(a.sessions[:a.active], a.sessions[a.active+1:]...)
 	if len(a.sessions) == 0 {
+		a.persist()
 		return tea.Quit
 	}
 	if a.active >= len(a.sessions) {
 		a.active = len(a.sessions) - 1
 	}
 	a.resize(a.w, a.h)
+	a.persist()
 	return nil
 }
 
@@ -479,6 +516,7 @@ func (a *App) handleClick(msg tea.MouseMsg) tea.Cmd {
 		if start, end := ThemeToggleRange(a.w); start > 0 && msg.X >= start && msg.X < end {
 			ToggleMode()
 			a.applyTheme()
+			a.persist()
 		}
 		return nil
 	}

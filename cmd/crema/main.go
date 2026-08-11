@@ -17,8 +17,14 @@ func main() {
 	dir := flag.String("dir", ".", "working directory the agent runs in")
 	doctor := flag.Bool("doctor", false, "check the environment and exit")
 	theme := flag.String("theme", "auto", "color theme: auto | light | dark (toggle at runtime with ctrl+l)")
+	fresh := flag.Bool("fresh", false, "start with one new agent instead of restoring the last session")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	// Which flags the user actually typed, so restoring doesn't quietly
+	// override an explicit --theme or ignore an explicit --dir.
+	typed := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { typed[f.Name] = true })
 
 	if *showVersion {
 		fmt.Println("crema", Version)
@@ -44,21 +50,37 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	switch *theme {
-	case "light":
+	var saved ui.State
+	if !*fresh {
+		saved = ui.LoadState()
+	}
+
+	switch {
+	case typed["theme"] || saved.Theme == "":
+		switch *theme {
+		case "light":
+			ui.SetMode(ui.ModeLight)
+		case "dark":
+			ui.SetMode(ui.ModeDark)
+		case "auto", "":
+			ui.SetMode(ui.DetectMode()) // asks the terminal about its background
+		default:
+			fail(fmt.Errorf("unknown theme %q (want auto, light, or dark)", *theme))
+		}
+	case saved.Theme == "light":
 		ui.SetMode(ui.ModeLight)
-	case "dark":
-		ui.SetMode(ui.ModeDark)
-	case "auto", "":
-		ui.SetMode(ui.DetectMode()) // asks the terminal about its background
 	default:
-		fail(fmt.Errorf("unknown theme %q (want auto, light, or dark)", *theme))
+		ui.SetMode(ui.ModeDark)
 	}
 
 	ui.SyncTerminalBackground()
 	defer ui.ResetTerminalBackground() // don't leave the shell recolored
 
-	p := tea.NewProgram(ui.NewApp(reg, cur, abs), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	app := ui.NewAppRestored(reg, saved, cur, abs)
+	if typed["dir"] || typed["agent"] {
+		app.EnsureSession(cur, abs) // an explicit target always gets focus
+	}
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		ui.ResetTerminalBackground()
 		fail(err)

@@ -37,15 +37,20 @@ type Session struct {
 }
 
 func NewSession(id int, backend agent.Agent, dir string) *Session {
-	s := &Session{
+	return &Session{
 		ID:      id,
 		Backend: backend,
 		Dir:     dir,
 		tl:      NewTimeline(80, 20),
 		dp:      NewDiffPanel(40, 20),
 	}
-	s.tl.Append(Block{Kind: BlockSystem, Text: backend.Label() + " · " + permissionNote(backend) +
-		"\nworking in " + dir})
+}
+
+// introduce writes the opening banner. Restored sessions skip it — they replay
+// the banner they were saved with instead of stacking a second one.
+func (s *Session) introduce() *Session {
+	s.tl.Append(Block{Kind: BlockSystem, Text: s.Backend.Label() + " · " + permissionNote(s.Backend) +
+		"\nworking in " + s.Dir})
 	return s
 }
 

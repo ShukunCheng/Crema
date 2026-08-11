@@ -3,6 +3,7 @@ package ui
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,7 +15,18 @@ import (
 func TestMain(m *testing.M) {
 	lipgloss.SetColorProfile(termenv.Ascii) // strip ANSI so assertions see plain text
 	bgWriter = io.Discard                   // keep OSC sequences out of test output
-	os.Exit(m.Run())
+
+	// Tests run turns, which persist state. Keep that out of the real user
+	// config directory — a test run must not clobber someone's open agents.
+	tmp, err := os.MkdirTemp("", "crema-test-state")
+	if err != nil {
+		panic(err)
+	}
+	statePathOverride = filepath.Join(tmp, "state.json")
+
+	code := m.Run()
+	os.RemoveAll(tmp)
+	os.Exit(code)
 }
 
 func TestRenderToolShowsNameAndFullInput(t *testing.T) {

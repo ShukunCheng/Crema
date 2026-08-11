@@ -106,6 +106,36 @@ glance which ones are still working:
 ╰──────────────────────╯
 ```
 
+## Memory between runs
+
+Crema remembers your open agents. Quit with three agents going and the next
+launch brings all three back — same backends, same directories, same
+conversations, and each one continues its *agent* session too, so Claude Code or
+Codex still has the context you built up rather than starting cold.
+
+Your theme choice is remembered as well.
+
+State lives in `state.json` under your user config directory
+(`%APPDATA%\crema\` on Windows, `~/.config/crema/` elsewhere), written with
+owner-only permissions because saved conversations and tool output can contain
+anything from your repositories. It is written atomically after every finished
+turn, so a crash costs you at most the turn in flight.
+
+To skip restoring and start with a single fresh agent:
+
+```
+crema --fresh
+```
+
+Naming `--dir` or `--agent` explicitly still restores everything and then
+focuses (or opens) the one you named.
+
+Two bounds keep the file small, and both announce themselves in the restored
+conversation rather than quietly losing history: the last 300 entries per agent
+are kept, and any single entry over 20,000 characters is cut with a counted
+marker. Agents whose directory has since been deleted are skipped with a visible
+reason instead of silently vanishing.
+
 ## Themes
 
 Crema ships a pink/purple palette in both light and dark. It picks one by asking

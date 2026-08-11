@@ -22,16 +22,18 @@ const (
 	BlockStats
 )
 
+// Block is one entry in a conversation. The json tags are what gets written to
+// the state file, so renaming a field changes the on-disk format.
 type Block struct {
-	Kind   BlockKind
-	Name   string
-	Text   string
-	IsErr  bool
-	Result *agent.TurnResult
+	Kind   BlockKind         `json:"kind"`
+	Name   string            `json:"name,omitempty"`
+	Text   string            `json:"text,omitempty"`
+	IsErr  bool              `json:"is_err,omitempty"`
+	Result *agent.TurnResult `json:"result,omitempty"`
 	// Collapsed hides a block's body behind a one-line, explicitly counted
 	// summary. Only ever set by the user clicking its header — crema still
 	// renders everything expanded by default.
-	Collapsed bool
+	Collapsed bool `json:"collapsed,omitempty"`
 }
 
 // collapsible reports whether a block kind can be folded by clicking it. Only
@@ -88,6 +90,20 @@ func (t *Timeline) Invalidate() {
 }
 
 func (t *Timeline) Following() bool { return t.follow }
+
+// Blocks exposes the conversation for saving.
+func (t *Timeline) Blocks() []Block { return t.blocks }
+
+// Restore replaces the conversation with previously saved blocks.
+func (t *Timeline) Restore(blocks []Block) {
+	t.blocks = append(t.blocks[:0], blocks...)
+	t.rendered = t.rendered[:0]
+	for _, b := range t.blocks {
+		t.rendered = append(t.rendered, renderBlock(b, t.width))
+	}
+	t.follow = true
+	t.sync()
+}
 
 func (t *Timeline) Append(b Block) {
 	t.blocks = append(t.blocks, b)
