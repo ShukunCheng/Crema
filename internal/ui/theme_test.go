@@ -85,7 +85,48 @@ func TestCtrlLTogglesThemeAndRepaintsCachedViews(t *testing.T) {
 	if !strings.Contains(light, "some output") {
 		t.Fatal("repainting must preserve the text")
 	}
-	if !strings.Contains(a.note, "light") {
-		t.Fatalf("the status bar should report the new mode: %q", a.note)
+}
+
+func TestStatusBarShowsAClickableThemeChip(t *testing.T) {
+	restoreTheme(t)
+	SetMode(ModeDark)
+	if !strings.Contains(RenderStatus(StatusData{Agent: "Mock"}, 80), "dark") {
+		t.Fatal("the status bar must show the current mode")
+	}
+	SetMode(ModeLight)
+	if !strings.Contains(RenderStatus(StatusData{Agent: "Mock"}, 80), "light") {
+		t.Fatal("the chip must follow the mode")
+	}
+	// the chip sits in the last themeToggleWidth columns
+	start, end := ThemeToggleRange(80)
+	if end != 80 || end-start != themeToggleWidth {
+		t.Fatalf("theme range = [%d,%d) at w=80", start, end)
+	}
+	if s, e := ThemeToggleRange(6); s != 0 || e != 0 {
+		t.Fatalf("a too-narrow bar must report no chip, got [%d,%d)", s, e)
+	}
+	if strings.Contains(RenderStatus(StatusData{Agent: "M"}, 6), "[") {
+		t.Fatal("a too-narrow bar must not draw a clipped chip")
+	}
+}
+
+func TestClickingTheThemeChipTogglesTheTheme(t *testing.T) {
+	restoreTheme(t)
+	SetMode(ModeDark)
+	a := testApp(t)
+
+	start, _ := ThemeToggleRange(a.w)
+	a.Update(click(start+2, a.h-1))
+	if CurrentMode() != ModeLight {
+		t.Fatal("clicking the chip must switch to light")
+	}
+	a.Update(click(start+2, a.h-1))
+	if CurrentMode() != ModeDark {
+		t.Fatal("clicking again must switch back")
+	}
+	// elsewhere on the status bar does nothing
+	a.Update(click(2, a.h-1))
+	if CurrentMode() != ModeDark {
+		t.Fatal("clicking the left of the status bar must not toggle")
 	}
 }

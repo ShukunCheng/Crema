@@ -65,6 +65,7 @@ The whole interface is clickable:
 |---|---|
 | an agent in the sidebar | switch to it |
 | `+ new agent` | open the picker |
+| the `[ dark ]` / `[ light ]` chip in the status bar | switch theme |
 | a row in the picker | choose that backend or folder |
 | any pane | focus it (so `pgup`/`pgdn` go there) |
 | a tool block's header line | fold or unfold that block |
@@ -109,7 +110,16 @@ glance which ones are still working:
 
 Crema ships a pink/purple palette in both light and dark. It picks one by asking
 your terminal about its background at startup; override with `--theme light` or
-`--theme dark`, and flip at any time with `ctrl+l`.
+`--theme dark`.
+
+To switch while running, click the chip at the right end of the status bar or
+press `ctrl+l`. The chip always shows the current mode and is the last thing the
+status bar gives up as the terminal narrows, so it stays reachable:
+
+```
+ ● Claude Code · acceptEdits · $0.14 · +12 −3        D:\my-project [ dark  ]
+                                                                  ^ click me
+```
 
 ## Flags
 

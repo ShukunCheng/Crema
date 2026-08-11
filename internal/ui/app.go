@@ -348,7 +348,7 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.resize(a.w, a.h)
 		return a, nil
 	case "ctrl+l":
-		a.note = "theme: " + ToggleMode().String()
+		ToggleMode() // the status-bar chip shows the result, so no note needed
 		a.applyTheme()
 		return a, nil
 	case "ctrl+r":
@@ -473,7 +473,15 @@ func (a *App) routeMouse(msg tea.MouseMsg) tea.Cmd {
 // handleClick makes the whole frame clickable: the sidebar switches or creates
 // agents, the panes take focus, and a block or file header folds.
 func (a *App) handleClick(msg tea.MouseMsg) tea.Cmd {
-	// Below the panes is the input box — checked first, because the sidebar
+	// The status bar is the last row; its right edge holds the theme chip.
+	if msg.Y == a.h-1 {
+		if start, end := ThemeToggleRange(a.w); start > 0 && msg.X >= start && msg.X < end {
+			ToggleMode()
+			a.applyTheme()
+		}
+		return nil
+	}
+	// Below the panes is the input box — checked before the sidebar, which
 	// only owns its columns down to the end of the pane row, not the input.
 	if msg.Y >= a.lay.PaneH {
 		if a.focus != focusInput {
