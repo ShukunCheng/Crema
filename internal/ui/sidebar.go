@@ -13,6 +13,44 @@ const SidebarWidth = 24
 // NewAgentRow is the label of the row that opens the new-agent picker.
 const NewAgentRow = "+ new agent"
 
+// Row layout, shared by RenderSidebar and SidebarRowAt so a click always lands
+// on whatever is actually drawn there:
+//
+//	0            "AGENTS"
+//	1..n         one row per session
+//	n+1          blank
+//	n+2          "+ new agent"
+const (
+	sidebarTitleRows = 1
+	sidebarGapRows   = 1
+)
+
+type SidebarTarget int
+
+const (
+	SidebarNone SidebarTarget = iota
+	SidebarSession
+	SidebarNewAgent
+)
+
+// SidebarRowOf is the inverse of SidebarRowAt for session rows.
+func SidebarRowOf(sessionIndex int) int { return sidebarTitleRows + sessionIndex }
+
+// SidebarRowAt maps a row inside the sidebar's content area to what is drawn
+// there. The index is meaningful only for SidebarSession.
+func SidebarRowAt(sessionCount, row int) (SidebarTarget, int) {
+	if row < sidebarTitleRows {
+		return SidebarNone, 0
+	}
+	if i := row - sidebarTitleRows; i < sessionCount {
+		return SidebarSession, i
+	}
+	if row == sidebarTitleRows+sessionCount+sidebarGapRows {
+		return SidebarNewAgent, 0
+	}
+	return SidebarNone, 0
+}
+
 // RenderSidebar lists every open agent with its live state. w and h are the
 // content area (inside the border); the result is exactly h lines of w columns.
 func RenderSidebar(sessions []*Session, active int, spin string, w, h int) string {

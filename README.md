@@ -57,6 +57,28 @@ pane needs 124 columns, the sidebar needs 70. Above those floors `ctrl+t` and
 `ctrl+b` decide. When the sidebar is hidden, the status bar still shows which
 agent you're on and how many are running, e.g. `Claude Code [2/3] · 1 running`.
 
+## Mouse
+
+The whole interface is clickable:
+
+| Click | Action |
+|---|---|
+| an agent in the sidebar | switch to it |
+| `+ new agent` | open the picker |
+| a row in the picker | choose that backend or folder |
+| any pane | focus it (so `pgup`/`pgdn` go there) |
+| a tool block's header line | fold or unfold that block |
+| a file's header line in the diff | fold or unfold that file |
+| scroll wheel | scrolls whichever pane is under the pointer, focused or not |
+
+Folding is always yours to ask for and never happens on its own. A folded block
+says exactly how much is behind it — `▸ ⏵ Bash — 12 lines hidden, click to
+expand` — and folded diff files keep their state across refreshes, so an agent
+writing files won't reopen everything you tidied away. Expanded files show `▾`.
+
+Because crema captures the mouse, your terminal's own click-to-select is
+suppressed. Hold **shift** while dragging to select and copy text as usual.
+
 ## Multiple agents
 
 `ctrl+n` opens a two-step picker: choose a backend, then browse to the folder

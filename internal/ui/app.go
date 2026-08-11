@@ -274,8 +274,20 @@ func (a *App) anyBusy() bool {
 	return false
 }
 
+func (a *App) openPicker() {
+	start := "."
+	if s := a.cur(); s != nil {
+		start = s.Dir
+	}
+	a.picker = NewPicker(a.reg.Agents, start)
+}
+
 func (a *App) updatePicker(msg tea.KeyMsg) tea.Cmd {
-	done, canceled := a.picker.Update(msg)
+	return a.finishPicker(a.picker.Update(msg))
+}
+
+// finishPicker applies the picker's verdict, whether it came from a key or a click.
+func (a *App) finishPicker(done, canceled bool) tea.Cmd {
 	switch {
 	case canceled:
 		a.picker = nil
@@ -291,6 +303,19 @@ func (a *App) updatePicker(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+// modalRect is the picker's on-screen box, computed identically by View and by
+// the click handler.
+func (a *App) modalRect() (x, y, w, h int) {
+	w = min(a.w, 72)
+	h = a.lay.PaneH + InputHeight
+	return (a.w - w) / 2, 0, w, h
+}
+
+func isLeftClick(m tea.MouseMsg) bool {
+	// Wheel events are also "press", so the button has to be checked too.
+	return m.Action == tea.MouseActionPress && m.Button == tea.MouseButtonLeft
+}
+
 func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -299,11 +324,7 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Quit
 	case "ctrl+n":
-		start := "."
-		if s := a.cur(); s != nil {
-			start = s.Dir
-		}
-		a.picker = NewPicker(a.reg.Agents, start)
+		a.openPicker()
 		return a, nil
 	case "ctrl+w":
 		return a, a.closeSession()
@@ -422,10 +443,24 @@ func (a *App) cycleFocus() tea.Cmd {
 }
 
 func (a *App) routeMouse(msg tea.MouseMsg) tea.Cmd {
+	if a.picker != nil {
+		if !isLeftClick(msg) {
+			return nil
+		}
+		x, y, w, _ := a.modalRect()
+		if msg.X < x+2 || msg.X >= x+w-2 || msg.Y < y+1 {
+			return nil // border, padding, or outside the modal
+		}
+		return a.finishPicker(a.picker.ClickRow(msg.Y - (y + 1)))
+	}
+	if isLeftClick(msg) {
+		return a.handleClick(msg)
+	}
 	s := a.cur()
 	if s == nil {
 		return nil
 	}
+	// Wheel scrolls whichever pane is under the cursor, focus or not.
 	if a.lay.ShowDiff && msg.X >= a.lay.SidebarW+a.lay.TimelineW {
 		return s.dp.Update(msg)
 	}
@@ -433,6 +468,62 @@ func (a *App) routeMouse(msg tea.MouseMsg) tea.Cmd {
 		return s.tl.Update(msg)
 	}
 	return nil
+}
+
+// handleClick makes the whole frame clickable: the sidebar switches or creates
+// agents, the panes take focus, and a block or file header folds.
+func (a *App) handleClick(msg tea.MouseMsg) tea.Cmd {
+	// Below the panes is the input box — checked first, because the sidebar
+	// only owns its columns down to the end of the pane row, not the input.
+	if msg.Y >= a.lay.PaneH {
+		if a.focus != focusInput {
+			a.focus = focusInput
+			return a.in.Focus()
+		}
+		return nil
+	}
+	if a.lay.ShowSidebar && msg.X < a.lay.SidebarW {
+		a.clickSidebar(msg.Y)
+		return nil
+	}
+	s := a.cur()
+	if s == nil {
+		return nil
+	}
+	if a.lay.ShowDiff && msg.X >= a.lay.SidebarW+a.lay.TimelineW {
+		a.setFocus(focusDiff)
+		// the diff pane has a border, so its first content row is one down
+		if msg.Y >= 1 && msg.Y <= a.lay.PaneH-2 {
+			s.dp.ToggleCollapse(s.dp.HeaderFileAt(s.dp.YOffset() + msg.Y - 1))
+		}
+		return nil
+	}
+	a.setFocus(focusTimeline)
+	if i := s.tl.HeaderBlockAt(s.tl.YOffset() + msg.Y); i >= 0 {
+		s.tl.ToggleCollapse(i)
+	}
+	return nil
+}
+
+func (a *App) setFocus(f focusTarget) {
+	if a.focus == f {
+		return
+	}
+	a.focus = f
+	a.in.Blur()
+}
+
+// clickSidebar turns a click at screen row y into a selection or a new agent.
+func (a *App) clickSidebar(y int) {
+	if y < 1 || y > a.lay.PaneH-2 {
+		return // the box's own border
+	}
+	switch target, i := SidebarRowAt(len(a.sessions), y-1); target {
+	case SidebarSession:
+		a.selectSession(i)
+	case SidebarNewAgent:
+		a.openPicker()
+	}
 }
 
 func (a *App) routeToFocus(msg tea.Msg) tea.Cmd {

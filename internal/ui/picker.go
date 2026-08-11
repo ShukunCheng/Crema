@@ -53,7 +53,53 @@ func NewPicker(backends []agent.Agent, startDir string) *Picker {
 	return p
 }
 
+// Header line counts, shared by View and RowAt so a click lands on the row it
+// appears to: backend stage draws title+blank, directory stage title+path+blank.
+const (
+	pickerBackendHeaderRows = 2
+	pickerDirHeaderRows     = 3
+)
+
+type pickerTarget int
+
+const (
+	pickerTargetNone pickerTarget = iota
+	pickerTargetBackend
+	pickerTargetEntry
+)
+
 func (p *Picker) Stage() pickerStage { return p.stage }
+
+// RowAt maps a row inside the modal's content area to the item drawn there.
+func (p *Picker) RowAt(row int) (pickerTarget, int) {
+	if p.stage == stageBackend {
+		if i := row - pickerBackendHeaderRows; i >= 0 && i < len(p.backends) {
+			return pickerTargetBackend, i
+		}
+		return pickerTargetNone, 0
+	}
+	if row < pickerDirHeaderRows {
+		return pickerTargetNone, 0
+	}
+	if i := p.scroll + row - pickerDirHeaderRows; i < len(p.entries) {
+		return pickerTargetEntry, i
+	}
+	return pickerTargetNone, 0
+}
+
+// ClickRow moves the cursor to a row and activates it, exactly as enter would.
+func (p *Picker) ClickRow(row int) (done, canceled bool) {
+	enter := tea.KeyMsg{Type: tea.KeyEnter}
+	switch target, i := p.RowAt(row); target {
+	case pickerTargetBackend:
+		p.bIdx = i
+		return p.updateBackend(enter)
+	case pickerTargetEntry:
+		p.dIdx = i
+		return p.updateDir(enter)
+	}
+	return false, false
+}
 
 // Result is valid only once Update reports done.
 func (p *Picker) Result() (agent.Agent, string) { return p.chosen, p.dir }

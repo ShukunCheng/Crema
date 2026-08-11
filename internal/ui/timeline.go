@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/ShukunCheng/Crema/internal/agent"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type BlockKind int
@@ -27,6 +29,20 @@ type Block struct {
 	Text   string
 	IsErr  bool
 	Result *agent.TurnResult
+	// Collapsed hides a block's body behind a one-line, explicitly counted
+	// summary. Only ever set by the user clicking its header — crema still
+	// renders everything expanded by default.
+	Collapsed bool
+}
+
+// collapsible reports whether a block kind can be folded by clicking it. Only
+// the bulky ones; prose and stats always stay visible.
+func collapsible(k BlockKind) bool {
+	switch k {
+	case BlockTool, BlockToolOutput, BlockThinking, BlockError:
+		return true
+	}
+	return false
 }
 
 // Timeline owns the conversation blocks and their scroll state. Rendered text
@@ -135,7 +151,64 @@ func (t *Timeline) Update(msg tea.Msg) tea.Cmd {
 
 func (t *Timeline) View() string { return t.vp.View() }
 
+// YOffset is the first content line currently visible, for hit-testing.
+func (t *Timeline) YOffset() int { return t.vp.YOffset }
+
+// HeaderBlockAt returns the index of the collapsible block whose header sits on
+// contentLine, or -1. Only headers toggle, so clicking a block's body scrolls
+// or focuses instead of folding it out from under the pointer.
+func (t *Timeline) HeaderBlockAt(contentLine int) int {
+	line := 0
+	for i, r := range t.rendered {
+		if line == contentLine {
+			if collapsible(t.blocks[i].Kind) {
+				return i
+			}
+			return -1
+		}
+		line += strings.Count(r, "\n")
+		if line > contentLine {
+			return -1
+		}
+	}
+	return -1
+}
+
+// ToggleCollapse folds or unfolds one block.
+func (t *Timeline) ToggleCollapse(i int) {
+	if i < 0 || i >= len(t.blocks) {
+		return
+	}
+	t.blocks[i].Collapsed = !t.blocks[i].Collapsed
+	t.rendered[i] = renderBlock(t.blocks[i], t.width)
+	t.vp.SetContent(t.Content())
+}
+
 func renderBlock(b Block, w int) string {
+	if b.Collapsed && collapsible(b.Kind) {
+		return renderCollapsed(b, w)
+	}
+	return renderExpanded(b, w)
+}
+
+// renderCollapsed states exactly how much is hidden and how to get it back.
+func renderCollapsed(b Block, w int) string {
+	full := strings.TrimRight(renderExpanded(b, w), "\n")
+	hidden := strings.Count(full, "\n") + 1
+	head := "output"
+	switch b.Kind {
+	case BlockTool:
+		head = "⏵ " + b.Name
+	case BlockThinking:
+		head = "✳ thinking"
+	case BlockError:
+		head = "✖ error"
+	}
+	label := fmt.Sprintf("▸ %s — %d lines hidden, click to expand", head, hidden)
+	return lipgloss.NewStyle().Foreground(T.Yellow).Width(max(1, w)).Render(label) + "\n"
+}
+
+func renderExpanded(b Block, w int) string {
 	switch b.Kind {
 	case BlockUser:
 		return RenderUser(b.Text, w)

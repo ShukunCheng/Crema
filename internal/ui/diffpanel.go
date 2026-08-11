@@ -25,19 +25,46 @@ func clip(s string, w int) string {
 	return ansi.Truncate(s, w, "›")
 }
 
-func RenderDiffSet(ds gitdiff.DiffSet, w int) string {
-	if w <= 0 {
-		return ""
+// diffRow is one rendered line plus what it belongs to, so a click can be
+// mapped back to a file without re-parsing the styled text.
+type diffRow struct {
+	text   string
+	file   string // collapse key; "" for section headers and notices
+	header bool   // the file's own header line — the click target
+}
+
+// DiffFileKey identifies a file within a DiffSet. A path can appear twice, once
+// staged and once not, so the flag is part of the key.
+func DiffFileKey(f gitdiff.File) string {
+	if f.Staged {
+		return "staged:" + f.Path
 	}
+	return "work:" + f.Path
+}
+
+func RenderDiffSet(ds gitdiff.DiffSet, w int) string {
+	return joinRows(renderDiffRows(ds, w, nil))
+}
+
+func joinRows(rows []diffRow) string {
 	var b strings.Builder
+	for _, r := range rows {
+		b.WriteString(r.text)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func renderDiffRows(ds gitdiff.DiffSet, w int, collapsed map[string]bool) []diffRow {
+	if w <= 0 {
+		return nil
+	}
 	dim := lipgloss.NewStyle().Foreground(T.Muted)
 	if ds.Err != "" {
-		b.WriteString(lipgloss.NewStyle().Foreground(T.Yellow).Render(clip(ds.Err, w)) + "\n")
-		return b.String()
+		return []diffRow{{text: lipgloss.NewStyle().Foreground(T.Yellow).Render(clip(ds.Err, w))}}
 	}
 	if len(ds.Files) == 0 {
-		b.WriteString(dim.Render(clip("working tree clean", w)) + "\n")
-		return b.String()
+		return []diffRow{{text: dim.Render(clip("working tree clean", w))}}
 	}
 	sections := []struct {
 		title string
@@ -47,6 +74,7 @@ func RenderDiffSet(ds gitdiff.DiffSet, w int) string {
 		{"UNSTAGED", func(f gitdiff.File) bool { return !f.Staged && f.Status != "untracked" }},
 		{"UNTRACKED", func(f gitdiff.File) bool { return f.Status == "untracked" }},
 	}
+	var rows []diffRow
 	for _, sec := range sections {
 		var files []gitdiff.File
 		for _, f := range ds.Files {
@@ -57,44 +85,66 @@ func RenderDiffSet(ds gitdiff.DiffSet, w int) string {
 		if len(files) == 0 {
 			continue
 		}
-		b.WriteString(lipgloss.NewStyle().Foreground(T.Magenta).Bold(true).
-			Render(clip("── "+sec.title+" ", w)) + "\n")
+		rows = append(rows, diffRow{text: lipgloss.NewStyle().Foreground(T.Magenta).Bold(true).
+			Render(clip("── "+sec.title+" ", w))})
 		for _, f := range files {
-			b.WriteString(renderDiffFile(f, w))
+			rows = append(rows, renderDiffFile(f, w, collapsed[DiffFileKey(f)])...)
 		}
 	}
-	return b.String()
+	return rows
 }
 
-func renderDiffFile(f gitdiff.File, w int) string {
-	var b strings.Builder
+func renderDiffFile(f gitdiff.File, w int, folded bool) []diffRow {
+	key := DiffFileKey(f)
 	name := f.Path
 	if f.Status == "renamed" && f.OldPath != "" {
 		name = f.OldPath + " → " + f.Path
 	}
-	head := fmt.Sprintf("%s %s  +%d −%d", statusGlyph(f.Status), name, f.Additions, f.Deletions)
-	b.WriteString(lipgloss.NewStyle().Foreground(T.Pink).Bold(true).Render(clip(head, w)) + "\n")
-	if f.Note != "" {
-		b.WriteString(lipgloss.NewStyle().Foreground(T.Yellow).Render(clip("  "+f.Note, w)) + "\n")
+	marker := "▾"
+	if folded {
+		marker = "▸"
 	}
+	head := fmt.Sprintf("%s %s %s  +%d −%d", marker, statusGlyph(f.Status), name, f.Additions, f.Deletions)
+	rows := []diffRow{{
+		text:   lipgloss.NewStyle().Foreground(T.Pink).Bold(true).Render(clip(head, w)),
+		file:   key,
+		header: true,
+	}}
+
+	body := func(s string) diffRow { return diffRow{text: s, file: key} }
+	if f.Note != "" {
+		rows = append(rows, body(lipgloss.NewStyle().Foreground(T.Yellow).Render(clip("  "+f.Note, w))))
+	}
+	if folded {
+		hidden := 0
+		for _, h := range f.Hunks {
+			hidden += 1 + len(h.Lines)
+		}
+		if hidden > 0 {
+			rows = append(rows, body(lipgloss.NewStyle().Foreground(T.Yellow).
+				Render(clip(fmt.Sprintf("  %d lines hidden, click to expand", hidden), w))))
+		}
+		return rows
+	}
+
 	add := lipgloss.NewStyle().Foreground(T.Green)
 	del := lipgloss.NewStyle().Foreground(T.Red)
 	ctx := lipgloss.NewStyle().Foreground(T.Muted)
 	hdr := lipgloss.NewStyle().Foreground(T.Purple)
 	for _, h := range f.Hunks {
-		b.WriteString(hdr.Render(clip(h.Header, w)) + "\n")
+		rows = append(rows, body(hdr.Render(clip(h.Header, w))))
 		for _, ln := range h.Lines {
 			switch ln.Kind {
 			case gitdiff.LineAdd:
-				b.WriteString(add.Render(clip("+"+ln.Text, w)) + "\n")
+				rows = append(rows, body(add.Render(clip("+"+ln.Text, w))))
 			case gitdiff.LineDel:
-				b.WriteString(del.Render(clip("-"+ln.Text, w)) + "\n")
+				rows = append(rows, body(del.Render(clip("-"+ln.Text, w))))
 			default:
-				b.WriteString(ctx.Render(clip(" "+ln.Text, w)) + "\n")
+				rows = append(rows, body(ctx.Render(clip(" "+ln.Text, w))))
 			}
 		}
 	}
-	return b.String()
+	return rows
 }
 
 func statusGlyph(status string) string {
@@ -113,35 +163,68 @@ func statusGlyph(status string) string {
 }
 
 type DiffPanel struct {
-	ds    gitdiff.DiffSet
-	vp    viewport.Model
-	width int
+	ds        gitdiff.DiffSet
+	vp        viewport.Model
+	width     int
+	rows      []diffRow
+	collapsed map[string]bool // file key → folded by the user
 }
 
 func NewDiffPanel(w, h int) *DiffPanel {
-	return &DiffPanel{vp: viewport.New(max(1, w), max(1, h)), width: max(1, w)}
+	d := &DiffPanel{
+		vp: viewport.New(max(1, w), max(1, h)), width: max(1, w),
+		collapsed: map[string]bool{},
+	}
+	d.render()
+	return d
 }
 
 func (d *DiffPanel) SetSize(w, h int) {
 	d.width = max(1, w)
 	d.vp.Width, d.vp.Height = max(1, w), max(1, h)
-	d.vp.SetContent(RenderDiffSet(d.ds, d.width))
+	d.render()
 }
 
 // SetDiff replaces the content, keeping the scroll offset when possible so a
-// background refresh doesn't jump the pane under the user.
+// background refresh doesn't jump the pane under the user. Folded files stay
+// folded across refreshes, since the key survives.
 func (d *DiffPanel) SetDiff(ds gitdiff.DiffSet) {
-	off := d.vp.YOffset
 	d.ds = ds
-	d.vp.SetContent(RenderDiffSet(ds, d.width))
-	d.vp.SetYOffset(off)
+	d.render()
 }
 
 // Invalidate re-renders the current diff, e.g. after a theme change.
-func (d *DiffPanel) Invalidate() {
+func (d *DiffPanel) Invalidate() { d.render() }
+
+func (d *DiffPanel) render() {
 	off := d.vp.YOffset
-	d.vp.SetContent(RenderDiffSet(d.ds, d.width))
+	d.rows = renderDiffRows(d.ds, d.width, d.collapsed)
+	d.vp.SetContent(joinRows(d.rows))
 	d.vp.SetYOffset(off)
+}
+
+// YOffset is the first content line currently visible, for hit-testing.
+func (d *DiffPanel) YOffset() int { return d.vp.YOffset }
+
+// HeaderFileAt returns the collapse key of the file whose header sits on
+// contentLine, or "" when that line is not a file header.
+func (d *DiffPanel) HeaderFileAt(contentLine int) string {
+	if contentLine < 0 || contentLine >= len(d.rows) {
+		return ""
+	}
+	if r := d.rows[contentLine]; r.header {
+		return r.file
+	}
+	return ""
+}
+
+// ToggleCollapse folds or unfolds one file.
+func (d *DiffPanel) ToggleCollapse(key string) {
+	if key == "" {
+		return
+	}
+	d.collapsed[key] = !d.collapsed[key]
+	d.render()
 }
 
 func (d *DiffPanel) Update(msg tea.Msg) tea.Cmd {
