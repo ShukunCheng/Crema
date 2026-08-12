@@ -46,7 +46,7 @@ the interface without spending anything.
 | `alt+1` … `alt+9` | jump straight to that agent |
 | `ctrl+b` | show/hide the agent sidebar |
 | `ctrl+p` | permissions and model for the focused agent |
-| `ctrl+e` | release the mouse so you can select text (and recapture it) |
+| `shift`+drag | select text (the mouse stays live for clicking) |
 | `ctrl+t` | show/hide the diff pane |
 | `ctrl+l` | switch between light and dark |
 | `ctrl+r` | refresh the diff now |
@@ -79,11 +79,12 @@ says exactly how much is behind it — `▸ ⏵ Bash — 12 lines hidden, click 
 expand` — and folded diff files keep their state across refreshes, so an agent
 writing files won't reopen everything you tidied away. Expanded files show `▾`.
 
-Because crema captures the mouse, your terminal's own click-to-select is
-suppressed. Hold **shift** while dragging usually works; where it doesn't, press
-`ctrl+e` (or click the `[ click ]` chip) to release the mouse entirely — the chip
-flips to `[ select ]`, clicking stops, and normal terminal selection works until
-you press it again.
+**Selecting text while the mouse is live:** hold **shift** and drag. Clicking and
+selecting both work at once — shift is what tells the terminal a given drag is
+yours rather than the app's. This is the same convention vim, tmux, and htop use,
+and Windows Terminal, iTerm2, GNOME Terminal, Konsole, and xterm all implement
+it. (A terminal can't route one drag to both places, so some modifier has to
+decide; shift is the one everything agrees on.)
 
 ## What the status bar tells you
 

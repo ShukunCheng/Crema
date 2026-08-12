@@ -9,19 +9,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Fixed chip widths at the right edge of the status bar, so hit-testing is
-// exact no matter what the rest of the bar says. Order, left to right:
-// mouse, theme.
-const (
-	themeToggleWidth = 9
-	mouseToggleWidth = 9
-)
+// themeToggleWidth is the fixed width of the chip at the right edge of the
+// status bar, so hit-testing is exact no matter what the rest of the bar says.
+const themeToggleWidth = 9
 
 type StatusData struct {
 	Agent, Mode, Dir, Spin, Note string
 	Model                        string
 	Busy                         bool
-	MouseOn                      bool
 	ElapsedSec                   float64
 	Cost                         float64
 	Adds, Dels                   int
@@ -68,16 +63,6 @@ func ThemeToggleRange(w int) (start, end int) {
 	return w - themeToggleWidth, w
 }
 
-// MouseToggleRange is the range of the clickable mouse chip, which sits just
-// left of the theme chip. 0,0 when there isn't room for both.
-func MouseToggleRange(w int) (start, end int) {
-	themeStart, _ := ThemeToggleRange(w)
-	if themeStart == 0 || themeStart < mouseToggleWidth+2 {
-		return 0, 0
-	}
-	return themeStart - mouseToggleWidth, themeStart
-}
-
 // chip renders a fixed-width button label, centered.
 func chip(label string, width int) string {
 	pad := width - 2 - len(label)
@@ -89,13 +74,6 @@ func chip(label string, width int) string {
 }
 
 func themeChip() string { return chip(CurrentMode().String(), themeToggleWidth) }
-
-func mouseChip(on bool) string {
-	if on {
-		return chip("click", mouseToggleWidth)
-	}
-	return chip("select", mouseToggleWidth)
-}
 
 // RenderStatus returns exactly one line of exactly w columns.
 func RenderStatus(s StatusData, w int) string {
@@ -129,16 +107,11 @@ func RenderStatus(s StatusData, w int) string {
 
 	barStyle := lipgloss.NewStyle().Foreground(T.Lilac).Background(T.Surface)
 	chipStyle := lipgloss.NewStyle().Foreground(T.Surface).Background(T.Purple).Bold(true)
-	mouseStyle := lipgloss.NewStyle().Foreground(T.Surface).Background(T.Magenta).Bold(true)
 
 	start, _ := ThemeToggleRange(w)
-	mouseStart, _ := MouseToggleRange(w)
 	body := w
-	switch {
-	case mouseStart > 0:
-		body = mouseStart // reserve the tail for both chips
-	case start > 0:
-		body = start
+	if start > 0 {
+		body = start // reserve the tail for the chip
 	}
 	if s.Dir != "" {
 		right := s.Dir + " "
@@ -150,12 +123,8 @@ func RenderStatus(s StatusData, w int) string {
 	if pad := body - lipgloss.Width(line); pad > 0 {
 		line += strings.Repeat(" ", pad)
 	}
-	out := barStyle.Render(line)
-	if mouseStart > 0 {
-		out += mouseStyle.Render(mouseChip(s.MouseOn))
+	if start == 0 {
+		return barStyle.Render(line)
 	}
-	if start > 0 {
-		out += chipStyle.Render(themeChip())
-	}
-	return out
+	return barStyle.Render(line) + chipStyle.Render(themeChip())
 }

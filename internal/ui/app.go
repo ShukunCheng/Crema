@@ -100,7 +100,6 @@ type App struct {
 	lay         Layout
 	wantSidebar bool
 	wantDiff    bool
-	mouseOn     bool // false releases the mouse so the terminal can select text
 	focus       focusTarget
 	note        string
 }
@@ -133,7 +132,7 @@ func newBareApp(reg *agent.Registry) *App {
 	sp.Style = fg(T.Pink)
 	return &App{
 		reg: reg, in: NewInput(80), sp: sp,
-		wantSidebar: true, wantDiff: true, mouseOn: true,
+		wantSidebar: true, wantDiff: true,
 	}
 	// Callers resize immediately: terminals send a WindowSizeMsg on startup,
 	// but a pipe or an odd SSH client may not, and a bare placeholder would
@@ -330,19 +329,6 @@ func (a *App) applySetting(chosen *settingsRow, canceled bool) tea.Cmd {
 	return nil
 }
 
-// toggleMouse releases or recaptures the mouse. Released, clicking stops
-// working but the terminal's own click-to-select does — the only way to copy
-// text out of a full-screen TUI in terminals where shift-drag isn't wired up.
-func (a *App) toggleMouse() tea.Cmd {
-	a.mouseOn = !a.mouseOn
-	if a.mouseOn {
-		a.note = ""
-		return tea.EnableMouseCellMotion
-	}
-	a.note = "mouse released — drag to select, ctrl+e to click again"
-	return tea.DisableMouse
-}
-
 func (a *App) openPicker() {
 	start := "."
 	if s := a.cur(); s != nil {
@@ -414,8 +400,6 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.settings = NewSettings(s)
 		}
 		return a, nil
-	case "ctrl+e":
-		return a, a.toggleMouse()
 	case "ctrl+w":
 		return a, a.closeSession()
 	case "esc":
@@ -579,9 +563,6 @@ func (a *App) handleClick(msg tea.MouseMsg) tea.Cmd {
 			a.persist()
 			return nil
 		}
-		if start, end := MouseToggleRange(a.w); start > 0 && msg.X >= start && msg.X < end {
-			return a.toggleMouse()
-		}
 		return nil
 	}
 	// Below the panes is the input box — checked before the sidebar, which
@@ -700,13 +681,13 @@ func (a *App) View() string {
 func (a *App) statusLine() string {
 	s := a.cur()
 	if s == nil {
-		return RenderStatus(StatusData{Agent: "no agents", Mode: "—", Note: a.note, MouseOn: a.mouseOn}, a.w)
+		return RenderStatus(StatusData{Agent: "no agents", Mode: "—", Note: a.note}, a.w)
 	}
 	d := StatusData{
 		Agent: s.Backend.Label(), Mode: string(s.Permission), Dir: s.Dir,
 		Busy: s.busy, Spin: a.sp.View(), Cost: s.cost,
 		Adds: s.diff.Additions, Dels: s.diff.Deletions, Note: a.note,
-		Model: s.Model, MouseOn: a.mouseOn,
+		Model:         s.Model,
 		ContextTokens: s.ctxTokens, ContextWindow: s.ctxWindow, Limit: s.limit,
 	}
 	if n := len(a.sessions); n > 1 {
