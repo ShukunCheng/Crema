@@ -18,6 +18,10 @@ type Session struct {
 	ID      int
 	Backend agent.Agent
 	Dir     string
+	// Permission and Model are per-agent settings, changed with ctrl+p and
+	// saved between runs.
+	Permission agent.PermissionMode
+	Model      string
 
 	tl *Timeline
 	dp *DiffPanel
@@ -29,6 +33,9 @@ type Session struct {
 	cancel    context.CancelFunc
 	agentSID  string // backend session id, for resume
 	cost      float64
+	ctxTokens int64 // context occupancy reported by the last turn
+	ctxWindow int64
+	limit     *agent.RateLimit
 	lastOpts  agent.RunOptions
 
 	diff        gitdiff.DiffSet
@@ -41,17 +48,49 @@ func NewSession(id int, backend agent.Agent, dir string) *Session {
 		ID:      id,
 		Backend: backend,
 		Dir:     dir,
-		tl:      NewTimeline(80, 20),
-		dp:      NewDiffPanel(40, 20),
+		// acceptEdits is the historical crema default: it lets the agent write
+		// files, which is the point, without handing it the shell.
+		Permission: agent.PermissionAcceptEdits,
+		Model:      agent.DefaultModel,
+		tl:         NewTimeline(80, 20),
+		dp:         NewDiffPanel(40, 20),
 	}
 }
 
 // introduce writes the opening banner. Restored sessions skip it — they replay
 // the banner they were saved with instead of stacking a second one.
 func (s *Session) introduce() *Session {
-	s.tl.Append(Block{Kind: BlockSystem, Text: s.Backend.Label() + " · " + permissionNote(s.Backend) +
-		"\nworking in " + s.Dir})
+	s.tl.Append(Block{Kind: BlockSystem, Text: s.Backend.Label() + " · " + s.modeNote() +
+		"\nworking in " + s.Dir + "  ·  ctrl+p for permissions and model"})
 	return s
+}
+
+// modeNote states the active permission mode and what it means in practice.
+func (s *Session) modeNote() string {
+	return "permissions: " + s.Permission.Label() + " — " + s.Permission.Describe()
+}
+
+// SetPermission changes the mode and records it in the conversation, so the
+// timeline always explains why a later turn could or couldn't run a command.
+func (s *Session) SetPermission(p agent.PermissionMode) {
+	if s.Permission == p {
+		return
+	}
+	s.Permission = p
+	s.tl.Append(Block{Kind: BlockSystem, Text: s.modeNote()})
+}
+
+// SetModel changes the model for the next turn.
+func (s *Session) SetModel(m string) {
+	if s.Model == m {
+		return
+	}
+	s.Model = m
+	name := m
+	if m == agent.DefaultModel {
+		name = "the CLI's default"
+	}
+	s.tl.Append(Block{Kind: BlockSystem, Text: "model: " + name + " (applies to the next message)"})
 }
 
 // Title is the sidebar label: backend plus the directory's last element.
@@ -93,7 +132,10 @@ func (s *Session) startTurn(prompt string) tea.Cmd {
 	s.cancel = cancel
 	s.busy = true
 	s.turnStart = time.Now()
-	s.lastOpts = agent.RunOptions{Prompt: prompt, Dir: s.Dir, SessionID: s.agentSID}
+	s.lastOpts = agent.RunOptions{
+		Prompt: prompt, Dir: s.Dir, SessionID: s.agentSID,
+		Permission: s.Permission, Model: s.Model,
+	}
 	return startStream(s.Backend, ctx, s.lastOpts, s.ID, s.streamSeq)
 }
 
@@ -109,6 +151,12 @@ func (s *Session) endTurn(r *agent.TurnResult) {
 			s.agentSID = r.SessionID
 		}
 		s.cost += r.CostUSD
+		if r.ContextWindow > 0 {
+			s.ctxTokens, s.ctxWindow = r.ContextTokens, r.ContextWindow
+		}
+		if r.RateLimit != nil {
+			s.limit = r.RateLimit
+		}
 	}
 }
 

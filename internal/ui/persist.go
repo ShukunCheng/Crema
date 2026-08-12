@@ -22,11 +22,13 @@ const (
 
 // SavedSession is one agent as it is written to disk.
 type SavedSession struct {
-	Backend  string  `json:"backend"`
-	Dir      string  `json:"dir"`
-	AgentSID string  `json:"agent_session_id,omitempty"`
-	Cost     float64 `json:"cost,omitempty"`
-	Blocks   []Block `json:"blocks,omitempty"`
+	Backend    string               `json:"backend"`
+	Dir        string               `json:"dir"`
+	AgentSID   string               `json:"agent_session_id,omitempty"`
+	Cost       float64              `json:"cost,omitempty"`
+	Permission agent.PermissionMode `json:"permission,omitempty"`
+	Model      string               `json:"model,omitempty"`
+	Blocks     []Block              `json:"blocks,omitempty"`
 }
 
 // State is everything crema remembers between runs.
@@ -104,11 +106,13 @@ func (a *App) StateSnapshot() State {
 	}
 	for _, s := range a.sessions {
 		st.Sessions = append(st.Sessions, SavedSession{
-			Backend:  s.Backend.Name(),
-			Dir:      s.Dir,
-			AgentSID: s.agentSID,
-			Cost:     s.cost,
-			Blocks:   trimForSaving(s.tl.Blocks()),
+			Backend:    s.Backend.Name(),
+			Dir:        s.Dir,
+			AgentSID:   s.agentSID,
+			Cost:       s.cost,
+			Permission: s.Permission,
+			Model:      s.Model,
+			Blocks:     trimForSaving(s.tl.Blocks()),
 		})
 	}
 	return st
@@ -162,6 +166,10 @@ func (a *App) RestoreSessions(st State) (int, []string) {
 		s := a.addSession(backend, ss.Dir)
 		s.agentSID = ss.AgentSID
 		s.cost = ss.Cost
+		s.Model = ss.Model
+		if ss.Permission != "" && backendSupports(backend, ss.Permission) {
+			s.Permission = ss.Permission
+		}
 		s.tl.Restore(ss.Blocks)
 		s.tl.Append(Block{Kind: BlockSystem, Text: resumedNote(ss, st.SavedAt)})
 	}
@@ -180,6 +188,17 @@ func resumedNote(ss SavedSession, savedAt time.Time) string {
 		return "restored from " + when + " · no agent session to resume, the next message starts fresh"
 	}
 	return "restored from " + when + " · continuing agent session " + ss.AgentSID
+}
+
+// backendSupports guards restore: a mode saved under an older build (or a
+// different backend) must not be silently handed to one that can't honor it.
+func backendSupports(b agent.Agent, p agent.PermissionMode) bool {
+	for _, m := range b.Modes() {
+		if m == p {
+			return true
+		}
+	}
+	return false
 }
 
 func findBackend(reg *agent.Registry, name string) agent.Agent {

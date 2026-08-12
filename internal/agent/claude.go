@@ -25,12 +25,43 @@ func (c *Claude) Available() error {
 	return nil
 }
 
+// Modes are the four the CLI's --permission-mode accepts that make sense
+// headlessly, least permissive first.
+func (c *Claude) Modes() []PermissionMode {
+	return []PermissionMode{PermissionDefault, PermissionPlan, PermissionAcceptEdits, PermissionFull}
+}
+
+// Models are the CLI's aliases, which always track the current release —
+// pinning a dated model id here would go stale.
+func (c *Claude) Models() []string {
+	return []string{DefaultModel, "opus", "sonnet", "haiku", "fable"}
+}
+
+// claudeMode maps crema's mode onto the CLI's --permission-mode values.
+func claudeMode(p PermissionMode) string {
+	switch p {
+	case PermissionAcceptEdits:
+		return "acceptEdits"
+	case PermissionFull:
+		return "bypassPermissions"
+	case PermissionPlan:
+		return "plan"
+	default:
+		return ""
+	}
+}
+
 func (c *Claude) args(opts RunOptions) []string {
 	a := []string{
 		"-p", opts.Prompt,
 		"--output-format", "stream-json",
 		"--verbose", // required by the CLI when combining -p with stream-json
-		"--permission-mode", "acceptEdits",
+	}
+	if m := claudeMode(opts.Permission); m != "" {
+		a = append(a, "--permission-mode", m)
+	}
+	if opts.Model != DefaultModel {
+		a = append(a, "--model", opts.Model)
 	}
 	if opts.SessionID != "" {
 		a = append(a, "--resume", opts.SessionID)

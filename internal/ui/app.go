@@ -91,14 +91,16 @@ type App struct {
 	active   int
 	nextID   int
 
-	in     *Input
-	sp     spinner.Model
-	picker *Picker
+	in       *Input
+	sp       spinner.Model
+	picker   *Picker
+	settings *Settings
 
 	w, h        int
 	lay         Layout
 	wantSidebar bool
 	wantDiff    bool
+	mouseOn     bool // false releases the mouse so the terminal can select text
 	focus       focusTarget
 	note        string
 }
@@ -131,11 +133,26 @@ func newBareApp(reg *agent.Registry) *App {
 	sp.Style = fg(T.Pink)
 	return &App{
 		reg: reg, in: NewInput(80), sp: sp,
-		wantSidebar: true, wantDiff: true,
+		wantSidebar: true, wantDiff: true, mouseOn: true,
 	}
 	// Callers resize immediately: terminals send a WindowSizeMsg on startup,
 	// but a pipe or an odd SSH client may not, and a bare placeholder would
 	// be all the user ever sees.
+}
+
+// ApplyToFocused sets startup flags on the focused agent, overriding whatever
+// was restored. Only the flags the user actually typed are applied.
+func (a *App) ApplyToFocused(setPerm bool, perm agent.PermissionMode, setModel bool, model string) {
+	s := a.cur()
+	if s == nil {
+		return
+	}
+	if setPerm {
+		s.SetPermission(perm)
+	}
+	if setModel {
+		s.SetModel(model)
+	}
 }
 
 // EnsureSession focuses an existing agent for backend+dir, or opens one. Used
@@ -180,28 +197,6 @@ func (a *App) sessionByID(id int) *Session {
 	return nil
 }
 
-func permissionNote(a agent.Agent) string {
-	switch a.Name() {
-	case "claude":
-		return "permission mode acceptEdits — file edits apply without asking"
-	case "codex":
-		return "sandbox full-auto — file edits apply without asking"
-	default:
-		return "demo agent, no real work performed"
-	}
-}
-
-func modeLabel(a agent.Agent) string {
-	switch a.Name() {
-	case "claude":
-		return "acceptEdits"
-	case "codex":
-		return "full-auto"
-	default:
-		return "demo"
-	}
-}
-
 func (a *App) Init() tea.Cmd {
 	cmds := []tea.Cmd{a.in.Focus()}
 	for _, s := range a.sessions {
@@ -217,6 +212,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case tea.KeyMsg:
+		if a.settings != nil {
+			return a, a.updateSettings(msg)
+		}
 		if a.picker != nil {
 			return a, a.updatePicker(msg)
 		}
@@ -306,6 +304,45 @@ func (a *App) anyBusy() bool {
 	return false
 }
 
+// updateSettings applies a chosen setting to the focused agent. The modal
+// stays open so several settings can be changed in one visit.
+func (a *App) updateSettings(msg tea.KeyMsg) tea.Cmd {
+	chosen, canceled := a.settings.Update(msg)
+	return a.applySetting(chosen, canceled)
+}
+
+func (a *App) applySetting(chosen *settingsRow, canceled bool) tea.Cmd {
+	if canceled {
+		a.settings = nil
+		return a.in.Focus()
+	}
+	s := a.cur()
+	if chosen == nil || s == nil {
+		return nil
+	}
+	switch chosen.kind {
+	case settingsPermission:
+		s.SetPermission(chosen.perm)
+	case settingsModel:
+		s.SetModel(chosen.model)
+	}
+	a.persist()
+	return nil
+}
+
+// toggleMouse releases or recaptures the mouse. Released, clicking stops
+// working but the terminal's own click-to-select does — the only way to copy
+// text out of a full-screen TUI in terminals where shift-drag isn't wired up.
+func (a *App) toggleMouse() tea.Cmd {
+	a.mouseOn = !a.mouseOn
+	if a.mouseOn {
+		a.note = ""
+		return tea.EnableMouseCellMotion
+	}
+	a.note = "mouse released — drag to select, ctrl+e to click again"
+	return tea.DisableMouse
+}
+
 func (a *App) openPicker() {
 	start := "."
 	if s := a.cur(); s != nil {
@@ -336,8 +373,20 @@ func (a *App) finishPicker(done, canceled bool) tea.Cmd {
 	return nil
 }
 
-// modalRect is the picker's on-screen box, computed identically by View and by
-// the click handler.
+// modalView renders whichever modal is open, or "" when none is.
+func (a *App) modalView() string {
+	_, _, w, h := a.modalRect()
+	switch {
+	case a.settings != nil:
+		return a.settings.View(w, h)
+	case a.picker != nil:
+		return a.picker.View(w, h)
+	}
+	return ""
+}
+
+// modalRect is the open modal's on-screen box, computed identically by View
+// and by the click handler.
 func (a *App) modalRect() (x, y, w, h int) {
 	w = min(a.w, 72)
 	h = a.lay.PaneH + InputHeight
@@ -360,6 +409,13 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+n":
 		a.openPicker()
 		return a, nil
+	case "ctrl+p":
+		if s := a.cur(); s != nil {
+			a.settings = NewSettings(s)
+		}
+		return a, nil
+	case "ctrl+e":
+		return a, a.toggleMouse()
 	case "ctrl+w":
 		return a, a.closeSession()
 	case "esc":
@@ -481,7 +537,7 @@ func (a *App) cycleFocus() tea.Cmd {
 }
 
 func (a *App) routeMouse(msg tea.MouseMsg) tea.Cmd {
-	if a.picker != nil {
+	if a.settings != nil || a.picker != nil {
 		if !isLeftClick(msg) {
 			return nil
 		}
@@ -489,7 +545,11 @@ func (a *App) routeMouse(msg tea.MouseMsg) tea.Cmd {
 		if msg.X < x+2 || msg.X >= x+w-2 || msg.Y < y+1 {
 			return nil // border, padding, or outside the modal
 		}
-		return a.finishPicker(a.picker.ClickRow(msg.Y - (y + 1)))
+		row := msg.Y - (y + 1)
+		if a.settings != nil {
+			return a.applySetting(a.settings.ClickRow(row))
+		}
+		return a.finishPicker(a.picker.ClickRow(row))
 	}
 	if isLeftClick(msg) {
 		return a.handleClick(msg)
@@ -517,6 +577,10 @@ func (a *App) handleClick(msg tea.MouseMsg) tea.Cmd {
 			ToggleMode()
 			a.applyTheme()
 			a.persist()
+			return nil
+		}
+		if start, end := MouseToggleRange(a.w); start > 0 && msg.X >= start && msg.X < end {
+			return a.toggleMouse()
 		}
 		return nil
 	}
@@ -605,11 +669,9 @@ func (a *App) View() string {
 	if a.w == 0 || a.h == 0 {
 		return "starting crema…"
 	}
-	if a.picker != nil {
-		modal := a.picker.View(min(a.w, 72), a.lay.PaneH+InputHeight)
-		modal = lipgloss.PlaceHorizontal(a.w, lipgloss.Center, modal,
-			lipgloss.WithWhitespaceBackground(T.Bg))
-		return modal + "\n" + a.statusLine()
+	if body := a.modalView(); body != "" {
+		return lipgloss.PlaceHorizontal(a.w, lipgloss.Center, body,
+			lipgloss.WithWhitespaceBackground(T.Bg)) + "\n" + a.statusLine()
 	}
 
 	s := a.cur()
@@ -638,12 +700,14 @@ func (a *App) View() string {
 func (a *App) statusLine() string {
 	s := a.cur()
 	if s == nil {
-		return RenderStatus(StatusData{Agent: "no agents", Mode: "—", Note: a.note}, a.w)
+		return RenderStatus(StatusData{Agent: "no agents", Mode: "—", Note: a.note, MouseOn: a.mouseOn}, a.w)
 	}
 	d := StatusData{
-		Agent: s.Backend.Label(), Mode: modeLabel(s.Backend), Dir: s.Dir,
+		Agent: s.Backend.Label(), Mode: string(s.Permission), Dir: s.Dir,
 		Busy: s.busy, Spin: a.sp.View(), Cost: s.cost,
 		Adds: s.diff.Additions, Dels: s.diff.Deletions, Note: a.note,
+		Model: s.Model, MouseOn: a.mouseOn,
+		ContextTokens: s.ctxTokens, ContextWindow: s.ctxWindow, Limit: s.limit,
 	}
 	if n := len(a.sessions); n > 1 {
 		running := 0

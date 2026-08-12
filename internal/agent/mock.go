@@ -17,6 +17,12 @@ func (m *Mock) Name() string     { return "mock" }
 func (m *Mock) Label() string    { return "Mock" }
 func (m *Mock) Available() error { return nil }
 
+func (m *Mock) Modes() []PermissionMode {
+	return []PermissionMode{PermissionDefault, PermissionAcceptEdits, PermissionFull}
+}
+
+func (m *Mock) Models() []string { return []string{DefaultModel, "demo-fast", "demo-slow"} }
+
 func (m *Mock) Run(ctx context.Context, opts RunOptions) (<-chan Event, error) {
 	ch := make(chan Event, 8)
 	script := []Event{

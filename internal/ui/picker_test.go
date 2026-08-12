@@ -18,6 +18,10 @@ type unavailableAgent struct{ name string }
 func (u unavailableAgent) Name() string     { return u.name }
 func (u unavailableAgent) Label() string    { return u.name }
 func (u unavailableAgent) Available() error { return errors.New(u.name + " CLI not found") }
+func (u unavailableAgent) Modes() []agent.PermissionMode {
+	return []agent.PermissionMode{agent.PermissionDefault, agent.PermissionAcceptEdits}
+}
+func (u unavailableAgent) Models() []string { return []string{agent.DefaultModel} }
 func (u unavailableAgent) Run(context.Context, agent.RunOptions) (<-chan agent.Event, error) {
 	return nil, errors.New("unavailable")
 }

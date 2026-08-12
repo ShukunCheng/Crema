@@ -35,7 +35,11 @@ func NewInput(w int) *Input {
 func (i *Input) ApplyTheme() {
 	for _, s := range []*textarea.Style{&i.ta.FocusedStyle, &i.ta.BlurredStyle} {
 		s.Base = base()
-		s.CursorLine = base()
+		// The textarea styles the row holding the cursor with CursorLine
+		// instead of Text, and the box is one row tall, so everything typed
+		// goes through it. Without a foreground it falls back to the
+		// terminal's own, which is unreadable on the theme background.
+		s.CursorLine = fg(T.Fg)
 		s.Text = fg(T.Fg)
 		s.Placeholder = fg(T.Muted)
 		s.EndOfBuffer = base()
@@ -43,6 +47,11 @@ func (i *Input) ApplyTheme() {
 	}
 	i.ta.FocusedStyle.Prompt = fg(T.Pink)
 	i.ta.BlurredStyle.Text = fg(T.Muted)
+	i.ta.BlurredStyle.CursorLine = fg(T.Muted)
+	// The caret is drawn by reversing its style, so give it theme colors too;
+	// reversing an unset style yields the terminal's defaults.
+	i.ta.Cursor.Style = fg(T.Fg)
+	i.ta.Cursor.TextStyle = fg(T.Fg)
 }
 
 func (i *Input) SetWidth(w int) {

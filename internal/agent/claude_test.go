@@ -4,12 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestClaudeArgs(t *testing.T) {
 	c := NewClaude()
-	got := c.args(RunOptions{Prompt: "fix the bug"})
+	got := c.args(RunOptions{Prompt: "fix the bug", Permission: PermissionAcceptEdits})
 	want := []string{"-p", "fix the bug", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"}
 	if len(got) != len(want) {
 		t.Fatalf("args = %v", got)
@@ -18,6 +19,26 @@ func TestClaudeArgs(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("args = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestClaudeArgsPermissionAndModel(t *testing.T) {
+	c := NewClaude()
+	full := strings.Join(c.args(RunOptions{Prompt: "x", Permission: PermissionFull, Model: "opus"}), " ")
+	if !strings.Contains(full, "--permission-mode bypassPermissions") {
+		t.Fatalf("full access must map to bypassPermissions: %s", full)
+	}
+	if !strings.Contains(full, "--model opus") {
+		t.Fatalf("model not passed: %s", full)
+	}
+	plan := strings.Join(c.args(RunOptions{Prompt: "x", Permission: PermissionPlan}), " ")
+	if !strings.Contains(plan, "--permission-mode plan") {
+		t.Fatalf("plan mode: %s", plan)
+	}
+	// the default mode leaves the CLI's own configuration alone
+	def := strings.Join(c.args(RunOptions{Prompt: "x", Permission: PermissionDefault}), " ")
+	if strings.Contains(def, "--permission-mode") || strings.Contains(def, "--model") {
+		t.Fatalf("default must add no flags: %s", def)
 	}
 }
 

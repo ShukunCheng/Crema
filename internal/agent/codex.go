@@ -26,11 +26,42 @@ func (c *Codex) Available() error {
 	return nil
 }
 
-func (c *Codex) args(opts RunOptions) []string {
-	if opts.SessionID != "" {
-		return []string{"exec", "resume", opts.SessionID, "--json", "--full-auto", opts.Prompt}
+// Modes: codex has no read-only planning mode, so crema doesn't offer one —
+// listing a mode the backend would silently ignore is worse than omitting it.
+func (c *Codex) Modes() []PermissionMode {
+	return []PermissionMode{PermissionDefault, PermissionAcceptEdits, PermissionFull}
+}
+
+// Models are left to the CLI's own configuration: codex model availability
+// depends on the signed-in plan, so a hardcoded list would offer models the
+// user cannot run.
+func (c *Codex) Models() []string {
+	return []string{DefaultModel}
+}
+
+// codexModeFlags maps crema's mode onto codex's sandbox/approval flags.
+func codexModeFlags(p PermissionMode) []string {
+	switch p {
+	case PermissionAcceptEdits:
+		return []string{"--full-auto"}
+	case PermissionFull:
+		return []string{"--dangerously-bypass-approvals-and-sandbox"}
+	default:
+		return nil
 	}
-	return []string{"exec", "--json", "--full-auto", opts.Prompt}
+}
+
+func (c *Codex) args(opts RunOptions) []string {
+	a := []string{"exec"}
+	if opts.SessionID != "" {
+		a = append(a, "resume", opts.SessionID)
+	}
+	a = append(a, "--json")
+	a = append(a, codexModeFlags(opts.Permission)...)
+	if opts.Model != DefaultModel {
+		a = append(a, "--model", opts.Model)
+	}
+	return append(a, opts.Prompt)
 }
 
 func (c *Codex) Run(ctx context.Context, opts RunOptions) (<-chan Event, error) {

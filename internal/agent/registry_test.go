@@ -14,6 +14,10 @@ type fakeAgent struct {
 func (f fakeAgent) Name() string     { return f.name }
 func (f fakeAgent) Label() string    { return f.name }
 func (f fakeAgent) Available() error { return f.err }
+func (f fakeAgent) Modes() []PermissionMode {
+	return []PermissionMode{PermissionDefault, PermissionAcceptEdits}
+}
+func (f fakeAgent) Models() []string { return []string{DefaultModel} }
 func (f fakeAgent) Run(context.Context, RunOptions) (<-chan Event, error) {
 	return nil, errors.New("not implemented")
 }

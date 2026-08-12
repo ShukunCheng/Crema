@@ -17,6 +17,10 @@ type stubAgent struct {
 func (s stubAgent) Name() string     { return s.name }
 func (s stubAgent) Label() string    { return strings.ToUpper(s.name) }
 func (s stubAgent) Available() error { return s.err }
+func (s stubAgent) Modes() []agent.PermissionMode {
+	return []agent.PermissionMode{agent.PermissionDefault, agent.PermissionAcceptEdits}
+}
+func (s stubAgent) Models() []string { return []string{agent.DefaultModel} }
 func (s stubAgent) Run(context.Context, agent.RunOptions) (<-chan agent.Event, error) {
 	return nil, errors.New("stub")
 }

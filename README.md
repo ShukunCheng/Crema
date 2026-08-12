@@ -45,6 +45,8 @@ the interface without spending anything.
 | `tab` / `shift+tab` | next / previous agent |
 | `alt+1` … `alt+9` | jump straight to that agent |
 | `ctrl+b` | show/hide the agent sidebar |
+| `ctrl+p` | permissions and model for the focused agent |
+| `ctrl+e` | release the mouse so you can select text (and recapture it) |
 | `ctrl+t` | show/hide the diff pane |
 | `ctrl+l` | switch between light and dark |
 | `ctrl+r` | refresh the diff now |
@@ -78,7 +80,25 @@ expand` — and folded diff files keep their state across refreshes, so an agent
 writing files won't reopen everything you tidied away. Expanded files show `▾`.
 
 Because crema captures the mouse, your terminal's own click-to-select is
-suppressed. Hold **shift** while dragging to select and copy text as usual.
+suppressed. Hold **shift** while dragging usually works; where it doesn't, press
+`ctrl+e` (or click the `[ click ]` chip) to release the mouse entirely — the chip
+flips to `[ select ]`, clicking stops, and normal terminal selection works until
+you press it again.
+
+## What the status bar tells you
+
+```
+ ● Claude Code · acceptEdits · opus · $0.6396 · +12 −3 · ctx 14% · 5h 42% · resets in 2h14m   D:\Crema [ click ][ dark  ]
+```
+
+Left to right: the focused agent (and `[2/3]` when several are open), its
+permission mode and model, spend so far, the diff totals, how full the model's
+context window is, and the backend's usage window with a countdown to reset.
+
+The context and usage figures come straight out of Claude Code's own event
+stream — crema reads the `contextWindow` it reports and the rate-limit events it
+emits, rather than estimating. Codex reports neither, so those two segments are
+simply absent for Codex agents rather than guessed at.
 
 ## Multiple agents
 
@@ -182,15 +202,43 @@ Crema spawns these CLIs as subprocesses and normalizes their JSON event streams
 into one internal event type. It never reads their config files, never stores
 tokens, and never talks to any model API directly.
 
-## Permission mode — read this
+## Permissions and model — `ctrl+p`
 
-Headless CLIs cannot show an interactive permission prompt, so crema starts them
-in an auto-approving mode (`acceptEdits` for Claude Code, `--full-auto` for Codex).
-**The agent will edit files without asking.** The status bar always shows the
-active mode, and the diff pane shows exactly what changed. Run crema in a git
-repo with a clean tree so you can always `git checkout` your way back.
-Bringing permission prompts into the TUI (via the Claude Agent SDK `canUseTool`
-callback) is the headline item for the next milestone.
+Headless CLIs cannot show an approval prompt, so a tool that *would* ask instead
+**fails**. That is why the permission mode matters more here than in the
+interactive CLIs, and why you'll see errors like *"This command requires
+approval"* if the mode is too tight for what you asked.
+
+`ctrl+p` opens per-agent settings. Each agent has its own mode and model:
+
+| Mode | What the agent may do |
+|---|---|
+| `ask` | the CLI's own default — most tools that need approval will fail |
+| `plan` | read-only; it plans but changes nothing (Claude Code only) |
+| `edits` | **the default.** File edits apply; shell commands are still blocked |
+| `full access` | no prompts at all; the agent can run any command |
+
+If your agent keeps reporting that commands need approval, `full access` is the
+mode that actually lets a headless coding agent work — at the cost of letting it
+run anything. The status bar always shows the active mode, the diff pane shows
+exactly what changed, and every mode change is written into the conversation so
+the transcript explains why a later turn could or couldn't run something. Run
+crema in a git repo with a clean tree so you can always `git checkout` back.
+
+The same panel picks the model — Claude Code's `opus` / `sonnet` / `haiku` /
+`fable` aliases, or the CLI's own default. Crema only offers modes and models
+the focused backend can actually honor: Codex has no read-only planning mode, so
+it isn't listed there, and Codex model choice is left to its own config because
+availability depends on your plan.
+
+Both settle at startup too, and are remembered per agent between runs:
+
+```
+crema --permission-mode full --model opus
+```
+
+Bringing real permission prompts into the TUI (via the Claude Agent SDK
+`canUseTool` callback) is still the headline item for a later milestone.
 
 ## Truncation policy
 

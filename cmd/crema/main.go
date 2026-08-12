@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ShukunCheng/Crema/internal/agent"
 	"github.com/ShukunCheng/Crema/internal/ui"
@@ -18,6 +19,9 @@ func main() {
 	doctor := flag.Bool("doctor", false, "check the environment and exit")
 	theme := flag.String("theme", "auto", "color theme: auto | light | dark (toggle at runtime with ctrl+l)")
 	fresh := flag.Bool("fresh", false, "start with one new agent instead of restoring the last session")
+	perm := flag.String("permission-mode", "acceptEdits",
+		"what the agent may do without asking: default | plan | acceptEdits | full (change later with ctrl+p)")
+	model := flag.String("model", "", "model for the first agent, e.g. opus | sonnet | haiku (default: the CLI's own)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -76,9 +80,16 @@ func main() {
 	ui.SyncTerminalBackground()
 	defer ui.ResetTerminalBackground() // don't leave the shell recolored
 
+	mode, err := parseMode(*perm, cur)
+	if err != nil {
+		fail(err)
+	}
 	app := ui.NewAppRestored(reg, saved, cur, abs)
 	if typed["dir"] || typed["agent"] {
 		app.EnsureSession(cur, abs) // an explicit target always gets focus
+	}
+	if typed["permission-mode"] || typed["model"] {
+		app.ApplyToFocused(typed["permission-mode"], mode, typed["model"], *model)
 	}
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
@@ -105,6 +116,23 @@ func pick(reg *agent.Registry, name string) (agent.Agent, error) {
 		}
 	}
 	return nil, fmt.Errorf("unknown agent %q (available: %v)", name, known)
+}
+
+// parseMode validates --permission-mode against what the chosen backend can
+// actually honor, so an unsupported mode fails loudly instead of being ignored.
+func parseMode(s string, backend agent.Agent) (agent.PermissionMode, error) {
+	m := agent.PermissionMode(s)
+	for _, ok := range backend.Modes() {
+		if ok == m {
+			return m, nil
+		}
+	}
+	var names []string
+	for _, ok := range backend.Modes() {
+		names = append(names, string(ok))
+	}
+	return "", fmt.Errorf("%s does not support permission mode %q (it supports: %s)",
+		backend.Label(), s, strings.Join(names, ", "))
 }
 
 func fail(err error) {

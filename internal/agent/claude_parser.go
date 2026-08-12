@@ -3,12 +3,14 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"time"
 )
 
 // ClaudeParser turns `claude --output-format stream-json` lines into Events.
 // Unknown top-level types and malformed lines are counted and skipped, never fatal.
 type ClaudeParser struct {
 	sessionID string
+	rate      *RateLimit // latest rate_limit_event, attached to the next TurnEnd
 	Skipped   int
 }
 
@@ -22,6 +24,21 @@ type claudeLine struct {
 	TotalCostUSD float64        `json:"total_cost_usd"`
 	Result       string         `json:"result"`
 	Usage        *claudeUsage   `json:"usage"`
+	// modelUsage is keyed by model id; we only need the context window, which
+	// is the same for every entry of a single turn.
+	ModelUsage    map[string]claudeModelUsage `json:"modelUsage"`
+	RateLimitInfo *claudeRateLimit            `json:"rate_limit_info"`
+}
+
+type claudeModelUsage struct {
+	ContextWindow int64 `json:"contextWindow"`
+}
+
+type claudeRateLimit struct {
+	Status        string  `json:"status"`
+	RateLimitType string  `json:"rateLimitType"`
+	Utilization   float64 `json:"utilization"`
+	ResetsAt      int64   `json:"resetsAt"` // unix seconds
 }
 
 type claudeMessage struct {
@@ -41,8 +58,16 @@ type claudeBlock struct {
 }
 
 type claudeUsage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
+	InputTokens         int64 `json:"input_tokens"`
+	OutputTokens        int64 `json:"output_tokens"`
+	CacheReadTokens     int64 `json:"cache_read_input_tokens"`
+	CacheCreationTokens int64 `json:"cache_creation_input_tokens"`
+}
+
+// context is everything the model had to read this turn — fresh input plus
+// both halves of the cache. That sum is what fills the context window.
+func (u claudeUsage) context() int64 {
+	return u.InputTokens + u.CacheReadTokens + u.CacheCreationTokens
 }
 
 func (p *ClaudeParser) SessionID() string { return p.sessionID }
@@ -63,6 +88,18 @@ func (p *ClaudeParser) ParseLine(line []byte) []Event {
 	switch l.Type {
 	case "system":
 		return nil // init records the session id above; other subtypes are tolerated
+	case "rate_limit_event":
+		if l.RateLimitInfo != nil {
+			r := RateLimit{
+				Type:        l.RateLimitInfo.RateLimitType,
+				Utilization: l.RateLimitInfo.Utilization,
+			}
+			if l.RateLimitInfo.ResetsAt > 0 {
+				r.ResetsAt = time.Unix(l.RateLimitInfo.ResetsAt, 0)
+			}
+			p.rate = &r // surfaced on the next TurnEnd
+		}
+		return nil
 	case "assistant", "user":
 		if l.Message == nil {
 			return nil
@@ -90,9 +127,19 @@ func (p *ClaudeParser) ParseLine(line []byte) []Event {
 		}
 		return evs
 	case "result":
-		res := TurnResult{SessionID: p.sessionID, DurationMS: l.DurationMS, CostUSD: l.TotalCostUSD}
+		res := TurnResult{
+			SessionID: p.sessionID, DurationMS: l.DurationMS,
+			CostUSD: l.TotalCostUSD, RateLimit: p.rate,
+		}
 		if l.Usage != nil {
 			res.InputTokens, res.OutputTokens = l.Usage.InputTokens, l.Usage.OutputTokens
+			res.ContextTokens = l.Usage.context()
+		}
+		for _, mu := range l.ModelUsage { // same window for every entry of one turn
+			if mu.ContextWindow > 0 {
+				res.ContextWindow = mu.ContextWindow
+				break
+			}
 		}
 		if l.IsError {
 			res.Err = l.Result

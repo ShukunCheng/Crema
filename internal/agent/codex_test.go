@@ -79,7 +79,7 @@ func TestCodexCommandAsArgvArrayStillParses(t *testing.T) {
 
 func TestCodexArgs(t *testing.T) {
 	c := NewCodex()
-	got := c.args(RunOptions{Prompt: "do it"})
+	got := c.args(RunOptions{Prompt: "do it", Permission: PermissionAcceptEdits})
 	want := []string{"exec", "--json", "--full-auto", "do it"}
 	if len(got) != len(want) {
 		t.Fatalf("args = %v, want %v", got, want)
@@ -89,7 +89,7 @@ func TestCodexArgs(t *testing.T) {
 			t.Fatalf("args = %v, want %v", got, want)
 		}
 	}
-	res := c.args(RunOptions{Prompt: "more", SessionID: "tid-9"})
+	res := c.args(RunOptions{Prompt: "more", SessionID: "tid-9", Permission: PermissionAcceptEdits})
 	wantRes := []string{"exec", "resume", "tid-9", "--json", "--full-auto", "more"}
 	if len(res) != len(wantRes) {
 		t.Fatalf("resume args = %v, want %v", res, wantRes)
@@ -97,6 +97,24 @@ func TestCodexArgs(t *testing.T) {
 	for i := range wantRes {
 		if res[i] != wantRes[i] {
 			t.Fatalf("resume args = %v, want %v", res, wantRes)
+		}
+	}
+}
+
+func TestCodexPermissionFlags(t *testing.T) {
+	c := NewCodex()
+	full := strings.Join(c.args(RunOptions{Prompt: "x", Permission: PermissionFull}), " ")
+	if !strings.Contains(full, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("full access must bypass the sandbox: %s", full)
+	}
+	def := strings.Join(c.args(RunOptions{Prompt: "x", Permission: PermissionDefault}), " ")
+	if strings.Contains(def, "--full-auto") || strings.Contains(def, "--dangerously") {
+		t.Fatalf("default must add no approval flags: %s", def)
+	}
+	// codex has no read-only planning mode, so crema must not offer one
+	for _, m := range c.Modes() {
+		if m == PermissionPlan {
+			t.Fatal("codex should not advertise a plan mode it cannot honor")
 		}
 	}
 }

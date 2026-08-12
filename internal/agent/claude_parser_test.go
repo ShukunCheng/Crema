@@ -51,8 +51,30 @@ func TestClaudeSmokeFixture(t *testing.T) {
 	if p.SessionID() != "988f2fb1-09f3-40fc-b3ff-14edfeba92a4" {
 		t.Fatalf("SessionID() = %q", p.SessionID())
 	}
-	if p.Skipped == 0 {
-		t.Fatal("rate_limit_event should have been counted as skipped")
+	if r.ContextTokens != 2+13537+20326 {
+		t.Fatalf("context should be input+cache reads+cache writes, got %d", r.ContextTokens)
+	}
+	if r.ContextWindow != 1000000 {
+		t.Fatalf("context window should come from modelUsage, got %d", r.ContextWindow)
+	}
+	if r.RateLimit == nil {
+		t.Fatal("the rate_limit_event should be attached to the turn result")
+	}
+	if r.RateLimit.Label() != "5h" || r.RateLimit.Utilization != 0.97 {
+		t.Fatalf("rate limit: %+v", r.RateLimit)
+	}
+	if r.RateLimit.ResetsAt.Unix() != 1786438800 {
+		t.Fatalf("reset time not parsed: %v", r.RateLimit.ResetsAt)
+	}
+}
+
+func TestClaudeReportsNoUsageWhenTheStreamHasNone(t *testing.T) {
+	// codex-style minimal result: no modelUsage, no rate_limit_event
+	p := &ClaudeParser{}
+	evs := p.ParseLine([]byte(`{"type":"result","subtype":"success","duration_ms":10,"session_id":"s"}`))
+	r := evs[0].Result
+	if r.ContextWindow != 0 || r.RateLimit != nil {
+		t.Fatalf("absent usage must stay absent, not be invented: %+v", r)
 	}
 }
 
