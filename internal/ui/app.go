@@ -8,6 +8,7 @@ import (
 
 	"github.com/ShukunCheng/Crema/internal/agent"
 	"github.com/ShukunCheng/Crema/internal/gitdiff"
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -100,6 +101,7 @@ type App struct {
 	lay         Layout
 	wantSidebar bool
 	wantDiff    bool
+	dragging    bool // a text selection is being dragged in the timeline
 	focus       focusTarget
 	note        string
 }
@@ -404,6 +406,10 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.closeSession()
 	case "esc":
 		if s := a.cur(); s != nil {
+			if s.tl.HasSelection() {
+				s.tl.ClearSelection() // drop the highlight before touching the turn
+				return a, nil
+			}
 			s.cancelTurn()
 		}
 		return a, nil
@@ -535,6 +541,12 @@ func (a *App) routeMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 		return a.finishPicker(a.picker.ClickRow(row))
 	}
+	// A plain drag inside the timeline selects text. Mouse reporting is
+	// all-or-nothing for the terminal, so selection in one pane has to be
+	// drawn by the app; everywhere else keeps behaving like buttons.
+	if cmd, handled := a.routeDrag(msg); handled {
+		return cmd
+	}
 	if isLeftClick(msg) {
 		return a.handleClick(msg)
 	}
@@ -550,6 +562,91 @@ func (a *App) routeMouse(msg tea.MouseMsg) tea.Cmd {
 		return s.tl.Update(msg)
 	}
 	return nil
+}
+
+// inTimeline reports whether a screen position is inside the conversation pane.
+func (a *App) inTimeline(x, y int) bool {
+	return y >= 0 && y < a.lay.PaneH &&
+		x >= a.lay.SidebarW && x < a.lay.SidebarW+a.lay.TimelineW
+}
+
+// timelinePoint converts screen coordinates to a position in the conversation.
+func (a *App) timelinePoint(s *Session, x, y int) (line, col int) {
+	return s.tl.YOffset() + y, x - a.lay.SidebarW
+}
+
+// routeDrag implements press/drag/release selection in the timeline. It
+// reports handled=true only for events it consumed, so a plain click still
+// falls through to the button behaviour.
+func (a *App) routeDrag(msg tea.MouseMsg) (tea.Cmd, bool) {
+	s := a.cur()
+	if s == nil || msg.Button != tea.MouseButtonLeft {
+		return nil, false
+	}
+	switch msg.Action {
+	case tea.MouseActionPress:
+		if !a.inTimeline(msg.X, msg.Y) {
+			s.tl.ClearSelection() // clicking elsewhere drops the highlight
+			return nil, false
+		}
+		line, col := a.timelinePoint(s, msg.X, msg.Y)
+		s.tl.BeginSelect(line, col)
+		a.dragging = true
+		// Consume the press. Acting on it now would fold a block out from
+		// under a drag that was only just beginning; the timeline's click
+		// behaviour runs on release instead, once we know it wasn't a drag.
+		return nil, true
+
+	case tea.MouseActionMotion:
+		if !a.dragging {
+			return nil, false
+		}
+		s.tl.ExtendSelect(a.timelinePoint(s, msg.X, min(max(msg.Y, 0), a.lay.PaneH-1)))
+		return nil, true
+
+	case tea.MouseActionRelease:
+		if !a.dragging {
+			return nil, false
+		}
+		a.dragging = false
+		if a.inTimeline(msg.X, msg.Y) { // the selection ends where the button came up
+			s.tl.ExtendSelect(a.timelinePoint(s, msg.X, msg.Y))
+		}
+		if text := s.tl.EndSelect(); text != "" {
+			a.copySelection(text)
+			return nil, true
+		}
+		return a.clickTimeline(s, msg.X, msg.Y), true // it was a click after all
+	}
+	return nil, false
+}
+
+// clickTimeline is the plain-click behaviour of the conversation pane: focus
+// it, and fold or unfold a block when its header was hit.
+func (a *App) clickTimeline(s *Session, x, y int) tea.Cmd {
+	a.setFocus(focusTimeline)
+	if i := s.tl.HeaderBlockAt(s.tl.YOffset() + y); i >= 0 {
+		s.tl.ToggleCollapse(i)
+	}
+	return nil
+}
+
+// copyToClipboard is a seam so tests don't clobber the real clipboard.
+var copyToClipboard = clipboard.WriteAll
+
+// copySelection puts the selection on the system clipboard, reporting either
+// outcome in the status bar rather than failing silently.
+func (a *App) copySelection(text string) {
+	if err := copyToClipboard(text); err != nil {
+		a.note = "could not copy: " + err.Error()
+		return
+	}
+	n := strings.Count(text, "\n") + 1
+	if n == 1 {
+		a.note = fmt.Sprintf("copied %d characters", len([]rune(text)))
+		return
+	}
+	a.note = fmt.Sprintf("copied %d lines", n)
 }
 
 // handleClick makes the whole frame clickable: the sidebar switches or creates
@@ -590,10 +687,8 @@ func (a *App) handleClick(msg tea.MouseMsg) tea.Cmd {
 		}
 		return nil
 	}
-	a.setFocus(focusTimeline)
-	if i := s.tl.HeaderBlockAt(s.tl.YOffset() + msg.Y); i >= 0 {
-		s.tl.ToggleCollapse(i)
-	}
+	// The conversation pane is handled on release by routeDrag, so a press
+	// that turns into a drag selects instead of folding.
 	return nil
 }
 

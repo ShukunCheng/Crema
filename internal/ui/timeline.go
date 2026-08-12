@@ -55,6 +55,13 @@ type Timeline struct {
 	vp       viewport.Model
 	width    int
 	follow   bool
+
+	// Selection lives here rather than in the terminal: mouse reporting is
+	// all-or-nothing for the whole window, so the only way to let a plain drag
+	// select in this pane while the rest stays clickable is to draw it here.
+	anchor, cursor selPoint
+	selecting      bool // a drag is in progress
+	selected       bool // a finished selection is showing
 }
 
 func NewTimeline(w, h int) *Timeline {
@@ -140,7 +147,7 @@ func (t *Timeline) AppendEvent(ev agent.Event) {
 func (t *Timeline) Content() string { return strings.Join(t.rendered, "") }
 
 func (t *Timeline) sync() {
-	t.vp.SetContent(t.Content())
+	t.vp.SetContent(t.highlighted())
 	if t.follow {
 		t.vp.GotoBottom()
 	}

@@ -46,7 +46,7 @@ the interface without spending anything.
 | `alt+1` … `alt+9` | jump straight to that agent |
 | `ctrl+b` | show/hide the agent sidebar |
 | `ctrl+p` | permissions and model for the focused agent |
-| `shift`+drag | select text (the mouse stays live for clicking) |
+| drag in the conversation | select text; copies to the clipboard on release |
 | `ctrl+t` | show/hide the diff pane |
 | `ctrl+l` | switch between light and dark |
 | `ctrl+r` | refresh the diff now |
@@ -72,6 +72,7 @@ The whole interface is clickable:
 | any pane | focus it (so `pgup`/`pgdn` go there) |
 | a tool block's header line | fold or unfold that block |
 | a file's header line in the diff | fold or unfold that file |
+| drag in the conversation | select text, copied on release (see below) |
 | scroll wheel | scrolls whichever pane is under the pointer, focused or not |
 
 Folding is always yours to ask for and never happens on its own. A folded block
@@ -79,12 +80,26 @@ says exactly how much is behind it — `▸ ⏵ Bash — 12 lines hidden, click 
 expand` — and folded diff files keep their state across refreshes, so an agent
 writing files won't reopen everything you tidied away. Expanded files show `▾`.
 
-**Selecting text while the mouse is live:** hold **shift** and drag. Clicking and
-selecting both work at once — shift is what tells the terminal a given drag is
-yours rather than the app's. This is the same convention vim, tmux, and htop use,
-and Windows Terminal, iTerm2, GNOME Terminal, Konsole, and xterm all implement
-it. (A terminal can't route one drag to both places, so some modifier has to
-decide; shift is the one everything agrees on.)
+## Selecting text
+
+**Drag inside the conversation pane to select, and it copies on release.** No
+modifier, and clicking keeps working everywhere else — a press only becomes a
+selection once you move, so dragging across a tool block selects it instead of
+folding it.
+
+Crema draws that selection itself. Mouse reporting is all-or-nothing for the
+whole terminal, so there is no way to ask for "the terminal selects in this pane
+and the app clicks in that one"; the only way to get plain-drag selection in the
+output while the sidebar and diff stay clickable is for the app to implement it.
+Which also means it can be smarter than a raw terminal selection: the `│ ` guide
+down the side of tool blocks is decoration, so it's stripped from what you copy —
+you get `go test ./...`, not `│ go test ./...`.
+
+`esc` clears the highlight (and only then cancels a running turn, if you press it
+again). Clicking any other pane clears it too. The status bar confirms each copy.
+
+Shift+drag still works as well, and hands the job to the terminal instead — worth
+knowing for the diff pane and sidebar, which crema doesn't select in.
 
 ## What the status bar tells you
 

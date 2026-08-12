@@ -11,6 +11,13 @@ func click(x, y int) tea.MouseMsg {
 	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
 }
 
+// clickPR sends a full press+release, which is what a real click is. The
+// conversation pane acts on release so a press can still become a drag.
+func clickPR(a *App, x, y int) {
+	a.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	a.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+}
+
 func wheel(x, y int) tea.MouseMsg {
 	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}
 }
@@ -147,7 +154,7 @@ func TestClickingATimelineToolHeaderFoldsIt(t *testing.T) {
 			break
 		}
 	}
-	a.Update(click(a.lay.SidebarW+2, header-s.tl.YOffset()))
+	clickPR(a, a.lay.SidebarW+2, header-s.tl.YOffset())
 
 	folded := s.tl.Content()
 	if strings.Contains(folded, "line two") {
@@ -156,7 +163,7 @@ func TestClickingATimelineToolHeaderFoldsIt(t *testing.T) {
 	if !strings.Contains(folded, "lines hidden") || !strings.Contains(folded, "click to expand") {
 		t.Fatalf("folding must say what is hidden and how to get it back:\n%s", folded)
 	}
-	a.Update(click(a.lay.SidebarW+2, header-s.tl.YOffset()))
+	clickPR(a, a.lay.SidebarW+2, header-s.tl.YOffset())
 	if !strings.Contains(s.tl.Content(), "line two") {
 		t.Fatal("clicking again must expand it")
 	}
@@ -168,7 +175,7 @@ func TestClickingATimelineBodyLineDoesNotFold(t *testing.T) {
 	s.tl.Append(Block{Kind: BlockTool, Name: "Bash", Text: "aaa\nbbb\nccc"})
 	before := s.tl.Content()
 	// row 0 of the pane is the very first content line, which is a system block
-	a.Update(click(a.lay.SidebarW+2, 0))
+	clickPR(a, a.lay.SidebarW+2, 0)
 	if s.tl.Content() != before {
 		t.Fatal("clicking a non-collapsible block must not change anything")
 	}
@@ -231,7 +238,7 @@ func TestClickingAPaneMovesFocus(t *testing.T) {
 	if a.focus != focusInput {
 		t.Fatal("focus starts on the input")
 	}
-	a.Update(click(a.lay.SidebarW+2, 2))
+	clickPR(a, a.lay.SidebarW+2, 2)
 	if a.focus != focusTimeline {
 		t.Fatal("clicking the timeline should focus it")
 	}
