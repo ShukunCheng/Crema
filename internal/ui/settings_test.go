@@ -77,6 +77,41 @@ func TestSettingsAppliesPermissionAndModel(t *testing.T) {
 	}
 }
 
+func TestDownFromTheInputOpensSettings(t *testing.T) {
+	a := testApp(t)
+	if a.focus != focusInput {
+		t.Fatal("focus starts on the input")
+	}
+	a.Update(kmsg(tea.KeyDown))
+	if a.settings == nil {
+		t.Fatal("down from the input must open the model/permission picker")
+	}
+	// the cursor lands on the active permission, so another down moves the list
+	before := a.settings.idx
+	a.Update(kmsg(tea.KeyDown))
+	if a.settings.idx == before {
+		t.Fatal("the panel navigates with the same key that opened it")
+	}
+}
+
+func TestDownStillMovesTheCursorInAMultiLineDraft(t *testing.T) {
+	a := testApp(t)
+	a.in.ta.SetValue("first line\nsecond line")
+	a.Update(kmsg(tea.KeyDown))
+	if a.settings != nil {
+		t.Fatal("down must stay cursor movement while a multi-line draft is open")
+	}
+}
+
+func TestDownOutsideTheInputDoesNotOpenSettings(t *testing.T) {
+	a := testApp(t)
+	a.focus = focusTimeline
+	a.Update(kmsg(tea.KeyDown))
+	if a.settings != nil {
+		t.Fatal("down scrolls the focused pane; only the input opens settings")
+	}
+}
+
 func TestSettingsChoiceReachesTheBackend(t *testing.T) {
 	a := testApp(t)
 	a.cur().Permission = agent.PermissionFull

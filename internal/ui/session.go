@@ -61,7 +61,7 @@ func NewSession(id int, backend agent.Agent, dir string) *Session {
 // the banner they were saved with instead of stacking a second one.
 func (s *Session) introduce() *Session {
 	s.tl.Append(Block{Kind: BlockSystem, Text: s.Backend.Label() + " · " + s.modeNote() +
-		"\nworking in " + s.Dir + "  ·  ctrl+p for permissions and model"})
+		"\nworking in " + s.Dir + "  ·  press ↓ in the input to change the model or permissions"})
 	return s
 }
 

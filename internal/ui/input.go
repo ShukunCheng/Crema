@@ -16,7 +16,7 @@ type Input struct {
 
 func NewInput(w int) *Input {
 	ta := textarea.New()
-	ta.Placeholder = "ask the agent…  (enter to send · alt+enter newline · tab switch agent · esc cancel)"
+	ta.Placeholder = "ask the agent…  (enter send · ↓ model & permissions · tab switch agent · esc cancel)"
 	ta.Prompt = "❯ "
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0

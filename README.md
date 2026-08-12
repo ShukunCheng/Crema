@@ -45,7 +45,8 @@ the interface without spending anything.
 | `tab` / `shift+tab` | next / previous agent |
 | `alt+1` … `alt+9` | jump straight to that agent |
 | `ctrl+b` | show/hide the agent sidebar |
-| `ctrl+p` | permissions and model for the focused agent |
+| `↓` (from the input) | open the model / permissions panel |
+| `ctrl+p` | the same panel, from anywhere |
 | drag in the conversation | select text; copies to the clipboard on release |
 | `ctrl+t` | show/hide the diff pane |
 | `ctrl+l` | switch between light and dark |
@@ -225,7 +226,9 @@ Headless CLIs cannot show an approval prompt, so a tool that *would* ask instead
 interactive CLIs, and why you'll see errors like *"This command requires
 approval"* if the mode is too tight for what you asked.
 
-`ctrl+p` opens per-agent settings. Each agent has its own mode and model:
+**Press `↓` in the input box** (or `ctrl+p`) to open per-agent settings. The panel
+navigates with the same `↓`, so you can open it and keep moving without changing
+keys. Each agent has its own mode and model:
 
 | Mode | What the agent may do |
 |---|---|

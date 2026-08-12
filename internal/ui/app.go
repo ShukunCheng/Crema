@@ -331,6 +331,12 @@ func (a *App) applySetting(chosen *settingsRow, canceled bool) tea.Cmd {
 	return nil
 }
 
+func (a *App) openSettings() {
+	if s := a.cur(); s != nil {
+		a.settings = NewSettings(s)
+	}
+}
+
 func (a *App) openPicker() {
 	start := "."
 	if s := a.cur(); s != nil {
@@ -398,10 +404,16 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.openPicker()
 		return a, nil
 	case "ctrl+p":
-		if s := a.cur(); s != nil {
-			a.settings = NewSettings(s)
-		}
+		a.openSettings()
 		return a, nil
+	case "down":
+		// From the input, down opens the model / permission picker — the panel
+		// navigates with the same key, so the gesture just keeps going. A
+		// multi-line draft keeps down as cursor movement.
+		if a.focus == focusInput && !strings.Contains(a.in.Value(), "\n") {
+			a.openSettings()
+			return a, nil
+		}
 	case "ctrl+w":
 		return a, a.closeSession()
 	case "esc":
