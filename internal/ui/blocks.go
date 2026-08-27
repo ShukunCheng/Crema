@@ -42,24 +42,58 @@ func Truncate(s string, maxLines int) (string, int) {
 	return strings.Join(lines[:maxLines], "\n"), len(lines) - maxLines
 }
 
+// RenderUser draws what you asked for on a band of its own, so a long
+// conversation can be skimmed by looking for where you last spoke.
 func RenderUser(text string, w int) string {
-	return head("❯ you", w, T.Pink) + "\n" + body(w).Foreground(T.Fg).Render(text) + "\n"
+	band := lipgloss.NewStyle().Background(T.UserBg).Width(max(1, w))
+	return band.Foreground(T.Pink).Bold(true).Render("❯ you") + "\n" +
+		band.Foreground(T.Fg).Render(text) + "\n"
+}
+
+// renderPending draws a message that is waiting for the running turn to end.
+// It sits on the same grey band as one you have already sent, because that is
+// what it is about to be — dimmed, and marked, so it is never mistaken for
+// something the agent has already been told. One line each: the queue is a
+// list of what is coming, not a second transcript.
+func renderPending(text string, w int) string {
+	band := lipgloss.NewStyle().Background(T.UserBg).Width(max(1, w))
+	return band.Foreground(T.Muted).Render(clip("❯ "+oneLine(text)+"  · waiting", max(1, w))) + "\n"
 }
 
 func RenderAssistant(text string, w int) string {
-	return body(w).Foreground(T.Fg).Render(text) + "\n"
+	var b strings.Builder
+	for _, seg := range splitTables(text) {
+		if seg.table {
+			rows := make([][]string, 0, len(seg.lines))
+			for i, ln := range seg.lines {
+				if i == 1 { // the dashes-and-pipes rule; the drawn one replaces it
+					continue
+				}
+				rows = append(rows, tableCells(ln))
+			}
+			b.WriteString(drawTable(rows, w))
+			continue
+		}
+		b.WriteString(body(w).Foreground(T.Fg).Render(strings.Join(seg.lines, "\n")) + "\n")
+	}
+	return b.String()
 }
 
 func RenderThinking(text string, w int) string {
 	txt := body(max(1, w-2)).Foreground(T.Muted).Italic(true).Render(text)
-	return fg(T.Muted).Italic(true).Width(max(1, w)).Render("✳ thinking") + "\n" +
+	return fg(T.Muted).Italic(true).Width(max(1, w)).Render("▾ thinking") + "\n" +
 		rail(txt, T.Muted) + "\n"
 }
 
 func RenderTool(name, input string, w int) string {
-	h := head("⏵ "+name, w, T.Purple)
+	h := head("▾ "+name, w, T.Purple)
 	if strings.TrimSpace(input) == "" {
 		return h + "\n"
+	}
+	// An edit is shown as the change it makes, not as the arguments that
+	// describe it. Anything else prints as it came.
+	if diff := renderEdit(name, input, max(1, w-2)); diff != "" {
+		return h + "\n" + rail(diff, T.Purple) + "\n"
 	}
 	txt := body(max(1, w-2)).Foreground(T.Lilac).Render(input)
 	return h + "\n" + rail(txt, T.Purple) + "\n"
@@ -84,7 +118,7 @@ func RenderToolOutput(content string, isErr bool, w int) string {
 
 func RenderError(text string, w int) string {
 	txt := body(max(1, w-2)).Foreground(T.Red).Render(text)
-	return head("✖ error", w, T.Red) + "\n" + rail(txt, T.Red) + "\n"
+	return head("▾ error", w, T.Red) + "\n" + rail(txt, T.Red) + "\n"
 }
 
 func RenderSystem(text string, w int) string {
@@ -102,13 +136,13 @@ func RenderStats(r *agent.TurnResult, w int) string {
 	if r.InputTokens > 0 || r.OutputTokens > 0 {
 		segs = append(segs, fmt.Sprintf("%d↑ %d↓ tok", r.InputTokens, r.OutputTokens))
 	}
-	mark := "✔"
+	mark := "✓"
 	c := T.Green
 	switch {
 	case r.Canceled:
 		mark, c = "⨯ canceled", T.Yellow
 	case r.Err != "":
-		mark, c = "✖ failed", T.Red
+		mark, c = "× failed", T.Red
 	}
 	return body(w).Foreground(c).Render(mark+" "+strings.Join(segs, " · ")) + "\n"
 }

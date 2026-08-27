@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ShukunCheng/Crema/internal/agent"
 	"github.com/charmbracelet/lipgloss"
@@ -15,6 +16,23 @@ import (
 func TestMain(m *testing.M) {
 	lipgloss.SetColorProfile(termenv.Ascii) // strip ANSI so assertions see plain text
 	bgWriter = io.Discard                   // keep OSC sequences out of test output
+
+	// Tests press keys as fast as the CPU allows and hold none of them down,
+	// which is exactly what the paste heuristic looks for. Pin both of its
+	// signals to "typed" so only the tests that mean to paste look pasted.
+	enterHeld = func() bool { return true }
+
+	// Same reason, other direction: ctrlHeld asks the OS whether control is
+	// physically down. A test run that happens while someone leans on ctrl
+	// would see every enter rewritten to a newline and every backspace to a
+	// word delete. Pin it off; the tests about that rewrite set it themselves.
+	ctrlHeld = func() bool { return false }
+	shiftHeld = func() bool { return false }
+	var clock time.Time
+	timeNow = func() time.Time {
+		clock = clock.Add(time.Second)
+		return clock
+	}
 
 	// Tests run turns, which persist state. Keep that out of the real user
 	// config directory — a test run must not clobber someone's open agents.

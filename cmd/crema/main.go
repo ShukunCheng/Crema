@@ -14,14 +14,21 @@ import (
 )
 
 func main() {
+	// Subcommands come before the flags: `crema statusline` is a filter, not
+	// a terminal interface, and it must not touch the window or the state.
+	if len(os.Args) > 1 && os.Args[1] == "statusline" {
+		os.Exit(runStatusline(os.Args[2:]))
+	}
 	agentName := flag.String("agent", "", "agent to start with: claude | codex | mock (default: first available)")
 	dir := flag.String("dir", ".", "working directory the agent runs in")
 	doctor := flag.Bool("doctor", false, "check the environment and exit")
 	theme := flag.String("theme", "auto", "color theme: auto | light | dark (toggle at runtime with ctrl+l)")
 	fresh := flag.Bool("fresh", false, "start with one new agent instead of restoring the last session")
-	perm := flag.String("permission-mode", "acceptEdits",
+	perm := flag.String("permission-mode", "full",
 		"what the agent may do without asking: default | plan | acceptEdits | full (change later with ctrl+p)")
 	model := flag.String("model", "", "model for the first agent, e.g. opus | sonnet | haiku (default: the CLI's own)")
+	window := flag.String("window", "auto",
+		"console window: auto (own one when started on its own) | own | share (Windows)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -47,6 +54,17 @@ func main() {
 		if !ok {
 			os.Exit(1)
 		}
+		return
+	}
+
+	// Before anything is drawn: if crema was started on its own into someone
+	// else's terminal, start again in a window of its own and let that one
+	// take over. --version and --doctor are above this, since a question
+	// answered on stdout belongs in the terminal that asked it.
+	switch moved, err := ownWindow(*window); {
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "crema: could not open a window of its own:", err)
+	case moved:
 		return
 	}
 
@@ -79,10 +97,19 @@ func main() {
 
 	ui.SyncTerminalBackground()
 	defer ui.ResetTerminalBackground() // don't leave the shell recolored
+	// Name the window, so the taskbar and alt-tab say Crema rather than
+	// whatever shell it was started from.
+	ui.SetTerminalTitle(ui.WindowTitle(abs))
+	defer ui.RestoreTerminalTitle()
 
-	mode, err := parseMode(*perm, cur)
-	if err != nil {
-		fail(err)
+	// Only when it was typed: the default belongs to crema, not to the flag,
+	// and a backend that lacks it must not fail a run nobody asked to restrict.
+	var mode agent.PermissionMode
+	if typed["permission-mode"] {
+		var err error
+		if mode, err = parseMode(*perm, cur); err != nil {
+			fail(err)
+		}
 	}
 	app := ui.NewAppRestored(reg, saved, cur, abs)
 	if typed["dir"] || typed["agent"] {
@@ -94,6 +121,7 @@ func main() {
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		ui.ResetTerminalBackground()
+		ui.RestoreTerminalTitle()
 		fail(err)
 	}
 }

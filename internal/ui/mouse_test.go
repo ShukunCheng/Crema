@@ -11,8 +11,8 @@ func click(x, y int) tea.MouseMsg {
 	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
 }
 
-// clickPR sends a full press+release, which is what a real click is. The
-// conversation pane acts on release so a press can still become a drag.
+// clickPR sends a full press+release, which is what a real click is. The two
+// text panes act on release so a press can still become a drag.
 func clickPR(a *App, x, y int) {
 	a.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	a.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
@@ -29,7 +29,7 @@ func sidebarRowY(contentRow int) int { return contentRow + 1 }
 // a layout change in one cannot silently misroute clicks in the other.
 func TestSidebarRowAtMatchesWhatIsDrawn(t *testing.T) {
 	sessions := sidebarSessions(t)
-	lines := strings.Split(RenderSidebar(sessions, 0, "⠋", 22, 10), "\n")
+	lines := strings.Split(RenderSidebar(sessions, 0, noDrag, "⠋", SidebarWidth-2, 10), "\n")
 
 	for row, ln := range lines {
 		target, idx := SidebarRowAt(len(sessions), row)
@@ -72,6 +72,67 @@ func TestClickingASidebarRowSwitchesAgent(t *testing.T) {
 	a.Update(click(3, sidebarRowY(SidebarRowOf(1))))
 	if a.active != 1 {
 		t.Fatalf("clicking the second row should focus agent 2, got %d", a.active)
+	}
+}
+
+// Every agent's row carries a × at its right edge, and clicking it closes
+// that agent — not the focused one.
+func TestClickingTheCloseButtonClosesThatAgent(t *testing.T) {
+	a := testApp(t)
+	a.addSession(fastMock(), t.TempDir())
+	a.addSession(fastMock(), t.TempDir())
+	a.selectSession(2)
+	gone := a.sessions[0].Title()
+
+	if !strings.Contains(RenderSidebar(a.sessions, 2, noDrag, "⠋", SidebarWidth-2, 10), "×") {
+		t.Fatal("each row needs a visible close button")
+	}
+
+	closeX := 1 + SidebarCloseCol(a.lay.SidebarW-2) // 1 for the border
+	a.Update(click(closeX, sidebarRowY(SidebarRowOf(0))))
+
+	if len(a.sessions) != 2 {
+		t.Fatalf("expected one agent closed, have %d", len(a.sessions))
+	}
+	for _, s := range a.sessions {
+		if s.Title() == gone {
+			t.Fatalf("%q should have been the one closed", gone)
+		}
+	}
+	// The agent being looked at is still the one being looked at, even though
+	// its position moved down by one.
+	if a.active != 1 {
+		t.Fatalf("active = %d, want the same agent as before at its new index", a.active)
+	}
+	if !strings.Contains(a.note, "closed") {
+		t.Fatalf("note = %q, want it to say what happened", a.note)
+	}
+}
+
+// A click on the name is still a selection, not a close.
+func TestClickingTheNameSelectsRatherThanCloses(t *testing.T) {
+	a := testApp(t)
+	a.addSession(fastMock(), t.TempDir())
+	a.selectSession(0)
+	a.Update(click(3, sidebarRowY(SidebarRowOf(1))))
+	if len(a.sessions) != 2 {
+		t.Fatalf("clicking the name must not close: %d agents left", len(a.sessions))
+	}
+	if a.active != 1 {
+		t.Fatalf("active = %d, want the clicked row", a.active)
+	}
+}
+
+// Closing the last agent quits, which is what ctrl+w has always done.
+func TestClosingTheLastAgentQuits(t *testing.T) {
+	a := testApp(t)
+	closeX := 1 + SidebarCloseCol(a.lay.SidebarW-2)
+	_, cmd := a.Update(click(closeX, sidebarRowY(SidebarRowOf(0))))
+	if cmd == nil {
+		t.Fatal("closing the only agent must quit")
+	}
+	if got, want := cmd(), tea.Quit(); got != want {
+		t.Fatalf("returned %T, want %T", got, want)
 	}
 }
 
@@ -160,8 +221,8 @@ func TestClickingATimelineToolHeaderFoldsIt(t *testing.T) {
 	if strings.Contains(folded, "line two") {
 		t.Fatalf("clicking the header should fold the body:\n%s", folded)
 	}
-	if !strings.Contains(folded, "lines hidden") || !strings.Contains(folded, "click to expand") {
-		t.Fatalf("folding must say what is hidden and how to get it back:\n%s", folded)
+	if !strings.Contains(folded, "▸ Ran 1 shell command") {
+		t.Fatalf("a folded block leaves a summary line behind:\n%s", folded)
 	}
 	clickPR(a, a.lay.SidebarW+2, header-s.tl.YOffset())
 	if !strings.Contains(s.tl.Content(), "line two") {
@@ -181,12 +242,12 @@ func TestClickingATimelineBodyLineDoesNotFold(t *testing.T) {
 	}
 }
 
-func TestClickingADiffFileHeaderFoldsThatFile(t *testing.T) {
+func TestClickingADiffFileHeaderOpensThatFile(t *testing.T) {
 	a := testApp(t)
 	s := a.cur()
 	s.dp.SetDiff(sampleDiff())
-	if !strings.Contains(joinRows(s.dp.rows), "package main") {
-		t.Fatal("diff should start expanded")
+	if strings.Contains(joinRows(s.dp.rows), "package main") {
+		t.Fatal("files arrive folded")
 	}
 
 	row := -1
@@ -199,37 +260,39 @@ func TestClickingADiffFileHeaderFoldsThatFile(t *testing.T) {
 	if row < 0 {
 		t.Fatal("no file header row found")
 	}
-	key := s.dp.HeaderFileAt(row)
-	if key == "" {
+	if key := s.dp.HeaderFileAt(row); key == "" {
 		t.Fatal("the header row must hit-test to a file")
 	}
 
 	diffX := a.lay.SidebarW + a.lay.TimelineW + 1
-	a.Update(click(diffX, row-s.dp.YOffset()+1)) // +1 for the pane border
+	clickPR(a, diffX, row-s.dp.YOffset()+2) // border, then the pane's own header
 
-	if strings.Contains(joinRows(s.dp.rows), "package main") {
-		t.Fatal("clicking the file header should fold its hunks")
-	}
-	if !strings.Contains(joinRows(s.dp.rows), "lines hidden") {
-		t.Fatal("a folded file must say how much is hidden")
-	}
-	a.Update(click(diffX, row-s.dp.YOffset()+1))
 	if !strings.Contains(joinRows(s.dp.rows), "package main") {
-		t.Fatal("clicking again must expand it")
+		t.Fatal("clicking the file header should show its hunks")
+	}
+	if !strings.Contains(joinRows(s.dp.rows), "▾") {
+		t.Fatal("an open file's header must be marked open")
+	}
+	clickPR(a, diffX, row-s.dp.YOffset()+2)
+	if strings.Contains(joinRows(s.dp.rows), "package main") {
+		t.Fatal("clicking again must fold it back")
 	}
 }
 
-func TestFoldedFilesSurviveADiffRefresh(t *testing.T) {
+// What the user opened stays open when the agent touches the tree again.
+func TestOpenedFilesSurviveADiffRefresh(t *testing.T) {
 	d := NewDiffPanel(50, 20)
 	d.SetDiff(sampleDiff())
-	key := DiffFileKey(sampleDiff().Files[0])
-	d.ToggleCollapse(key)
-	if !strings.Contains(joinRows(d.rows), "lines hidden") {
-		t.Fatal("file should be folded")
+	if strings.Contains(joinRows(d.rows), "package main") {
+		t.Fatal("files arrive folded")
+	}
+	d.ToggleCollapse(DiffFileKey(sampleDiff().Files[0]))
+	if !strings.Contains(joinRows(d.rows), "package main") {
+		t.Fatal("the file should be open")
 	}
 	d.SetDiff(sampleDiff()) // the agent touched something; the pane refreshes
-	if !strings.Contains(joinRows(d.rows), "lines hidden") {
-		t.Fatal("a refresh must not silently unfold what the user folded")
+	if !strings.Contains(joinRows(d.rows), "package main") {
+		t.Fatal("a refresh must not fold away what the user opened")
 	}
 }
 
@@ -242,7 +305,7 @@ func TestClickingAPaneMovesFocus(t *testing.T) {
 	if a.focus != focusTimeline {
 		t.Fatal("clicking the timeline should focus it")
 	}
-	a.Update(click(a.lay.SidebarW+a.lay.TimelineW+3, 3))
+	clickPR(a, a.lay.SidebarW+a.lay.TimelineW+3, 3)
 	if a.focus != focusDiff {
 		t.Fatal("clicking the diff pane should focus it")
 	}

@@ -18,7 +18,18 @@ func TestMain(m *testing.M) {
 		fakeCLI(mode)
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	// Usage is read from a file in the user's config directory. Point it
+	// somewhere harmless: a test must neither read what is really there nor
+	// leave a fabricated percentage behind for the real crema to believe.
+	tmp, err := os.MkdirTemp("", "crema-test-usage")
+	if err != nil {
+		panic(err)
+	}
+	usagePathOverride = filepath.Join(tmp, "usage.json")
+
+	code := m.Run()
+	os.RemoveAll(tmp)
+	os.Exit(code)
 }
 
 func fakeCLI(mode string) {

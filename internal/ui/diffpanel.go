@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/ShukunCheng/Crema/internal/gitdiff"
@@ -42,8 +41,20 @@ func DiffFileKey(f gitdiff.File) string {
 	return "work:" + f.Path
 }
 
+// RenderDiffSet draws a whole diff with every file open. The pane folds files
+// by default and opens the ones you click; this is the plain rendering of the
+// lot, with nothing hidden.
 func RenderDiffSet(ds gitdiff.DiffSet, w int) string {
-	return joinRows(renderDiffRows(ds, w, nil))
+	return joinRows(renderDiffRows(ds, w, allOpen(ds)))
+}
+
+// allOpen marks every file in ds as opened.
+func allOpen(ds gitdiff.DiffSet) map[string]bool {
+	open := make(map[string]bool, len(ds.Files))
+	for _, f := range ds.Files {
+		open[DiffFileKey(f)] = true
+	}
+	return open
 }
 
 func joinRows(rows []diffRow) string {
@@ -55,80 +66,26 @@ func joinRows(rows []diffRow) string {
 	return b.String()
 }
 
-func renderDiffRows(ds gitdiff.DiffSet, w int, collapsed map[string]bool) []diffRow {
-	if w <= 0 {
-		return nil
-	}
-	dim := fg(T.Muted).Width(w)
-	if ds.Err != "" {
-		return []diffRow{{text: fg(T.Yellow).Width(w).Render(clip(ds.Err, w))}}
-	}
-	if len(ds.Files) == 0 {
-		return []diffRow{{text: dim.Render(clip("working tree clean", w))}}
-	}
-	sections := []struct {
-		title string
-		pick  func(gitdiff.File) bool
-	}{
-		{"STAGED", func(f gitdiff.File) bool { return f.Staged }},
-		{"UNSTAGED", func(f gitdiff.File) bool { return !f.Staged && f.Status != "untracked" }},
-		{"UNTRACKED", func(f gitdiff.File) bool { return f.Status == "untracked" }},
-	}
-	var rows []diffRow
-	for _, sec := range sections {
-		var files []gitdiff.File
-		for _, f := range ds.Files {
-			if sec.pick(f) {
-				files = append(files, f)
-			}
-		}
-		if len(files) == 0 {
-			continue
-		}
-		rows = append(rows, diffRow{text: fg(T.Magenta).Bold(true).Width(w).
-			Render(clip("── "+sec.title+" ", w))})
-		for _, f := range files {
-			rows = append(rows, renderDiffFile(f, w, collapsed[DiffFileKey(f)])...)
-		}
-	}
-	return rows
+// renderDiffRows draws the unified view: one column, +/- prefixes, the shape
+// a pull request shows. It is what the pane uses, where a split would leave
+// two columns too narrow to read.
+func renderDiffRows(ds gitdiff.DiffSet, w int, open map[string]bool) []diffRow {
+	return renderRows(ds, w, open, renderDiffFile)
 }
 
 func renderDiffFile(f gitdiff.File, w int, folded bool) []diffRow {
 	key := DiffFileKey(f)
-	name := f.Path
-	if f.Status == "renamed" && f.OldPath != "" {
-		name = f.OldPath + " → " + f.Path
-	}
-	marker := "▾"
-	if folded {
-		marker = "▸"
-	}
-	headTxt := fmt.Sprintf("%s %s %s  +%d −%d", marker, statusGlyph(f.Status), name, f.Additions, f.Deletions)
-	rows := []diffRow{{
-		text:   fg(T.Pink).Bold(true).Width(w).Render(clip(headTxt, w)),
-		file:   key,
-		header: true,
-	}}
-
+	rows := diffFileHeader(f, w, folded)
 	bodyRow := func(s string) diffRow { return diffRow{text: s, file: key} }
 	if f.Note != "" {
 		rows = append(rows, bodyRow(fg(T.Yellow).Width(w).Render(clip("  "+f.Note, w))))
 	}
 	if folded {
-		hidden := 0
-		for _, h := range f.Hunks {
-			hidden += 1 + len(h.Lines)
-		}
-		if hidden > 0 {
-			rows = append(rows, bodyRow(fg(T.Yellow).Width(w).
-				Render(clip(fmt.Sprintf("  %d lines hidden, click to expand", hidden), w))))
-		}
-		return rows
+		return rows // the ▸ on the header says there is more behind it
 	}
 
-	add := fg(T.Green).Width(w)
-	del := fg(T.Red).Width(w)
+	add := addLine().Width(w)
+	del := delLine().Width(w)
 	ctx := fg(T.Muted).Width(w)
 	hdr := fg(T.Purple).Width(w)
 	for _, h := range f.Hunks {
@@ -150,11 +107,11 @@ func renderDiffFile(f gitdiff.File, w int, folded bool) []diffRow {
 func statusGlyph(status string) string {
 	switch status {
 	case "added":
-		return "✚"
+		return "+"
 	case "deleted":
-		return "✖"
+		return "×"
 	case "renamed":
-		return "➜"
+		return "→"
 	case "untracked":
 		return "?"
 	default:
@@ -163,47 +120,171 @@ func statusGlyph(status string) string {
 }
 
 type DiffPanel struct {
-	ds        gitdiff.DiffSet
-	vp        viewport.Model
-	width     int
-	rows      []diffRow
-	collapsed map[string]bool // file key → folded by the user
+	ds     gitdiff.DiffSet
+	vp     viewport.Model
+	width  int
+	height int // the pane's own height; the viewport gives up a row to search
+	rows   []diffRow
+	search diffSearch
+	// open holds the files the user has clicked open. Files arrive folded, so
+	// the pane is a list of what changed and by how much, and a file's diff is
+	// something you ask for — the conversation already shows the edits as the
+	// agent makes them.
+	open map[string]bool
+	// searchOpened is the subset of open that the search opened itself, so a
+	// changed query can close them again.
+	searchOpened map[string]bool
+	// full is the whole-frame shape: a file browser rather than one long
+	// stacked diff. pick is which file it is showing, and listFile maps a row
+	// of the file column back to one.
+	full     bool
+	pick     int
+	listFile []int
+	// view is which of the three sizes the diff is at, so the buttons in its
+	// own header can show that and offer the others.
+	view DiffView
+	// The diff is as worth copying as the conversation is — a path, a hunk
+	// header, the line an agent just changed — so it selects the same way.
+	sel selection
 }
 
 func NewDiffPanel(w, h int) *DiffPanel {
 	d := &DiffPanel{
-		vp: viewport.New(max(1, w), max(1, h)), width: max(1, w),
-		collapsed: map[string]bool{},
+		vp: viewport.New(max(1, w), max(1, h)), open: map[string]bool{},
 	}
 	d.vp.Style = base() // paint the theme behind the empty rows too
-	d.render()
+	d.SetSize(w, h)     // one place decides what the header and box leave over
 	return d
 }
 
 func (d *DiffPanel) SetSize(w, h int) {
-	d.width = max(1, w)
-	d.vp.Width, d.vp.Height = max(1, w), max(1, h)
+	d.width, d.height = max(1, w), max(1, h)
+	d.vp.Width, d.vp.Height = d.bodyWidth(), max(1, d.height-1-d.searchRows())
 	d.render()
 }
 
+// bodyWidth is how much the diff itself gets: everything, unless the file
+// browser is taking a column.
+func (d *DiffPanel) bodyWidth() int {
+	if d.browsing() {
+		return max(1, d.width-listW-1)
+	}
+	return d.width
+}
+
+// searchRows is the height the search box takes off the viewport.
+func (d *DiffPanel) searchRows() int {
+	if d.search.open {
+		return 1
+	}
+	return 0
+}
+
 // SetDiff replaces the content, keeping the scroll offset when possible so a
-// background refresh doesn't jump the pane under the user. Folded files stay
-// folded across refreshes, since the key survives.
+// background refresh doesn't jump the pane under the user. Whatever the user
+// opened stays open across refreshes, since the key survives.
 func (d *DiffPanel) SetDiff(ds gitdiff.DiffSet) {
 	d.ds = ds
+	if d.search.open {
+		d.applySearch(false) // a file the agent just touched may now match
+		return
+	}
 	d.render()
 }
 
 // Invalidate re-renders the current diff, e.g. after a theme change.
 func (d *DiffPanel) Invalidate() { d.render() }
 
+// SetView tells the pane how much room it has, which is what decides its
+// shape: a column beside the conversation is one stacked unified diff, and the
+// whole frame is a file browser with the one you picked beside the list.
+func (d *DiffPanel) SetView(v DiffView) {
+	if d.view == v {
+		return
+	}
+	d.view, d.full = v, v == DiffFull
+	d.SetSize(d.width, d.height) // the body's width changes with the shape
+}
+
 func (d *DiffPanel) render() {
 	d.vp.Style = base()
 	off := d.vp.YOffset
-	d.rows = renderDiffRows(d.ds, d.width, d.collapsed)
-	d.vp.SetContent(joinRows(d.rows))
+	w := d.bodyWidth()
+	switch {
+	case d.browsing():
+		d.rows = d.browserBody(w)
+	case d.full:
+		d.rows = renderSplitRows(d.ds, w, d.open)
+	default:
+		d.rows = renderDiffRows(d.ds, w, d.open)
+	}
+	// Anything that changes the rows moves the matches, so they are found
+	// again here rather than at each of the places that can do it.
+	if d.search.open {
+		d.search.hits = findHits(d.contentLines(), d.search.query)
+		if d.search.idx >= len(d.search.hits) {
+			d.search.idx = 0
+		}
+	}
+	d.sync()
 	d.vp.SetYOffset(off)
 }
+
+// sync pushes the rows into the viewport with the search matches and any
+// selection painted over them, in that order: a selection is something you are
+// doing now, so it wins the cells it covers.
+func (d *DiffPanel) sync() {
+	if !d.sel.hasRange() && len(d.search.hits) == 0 {
+		d.vp.SetContent(joinRows(d.rows))
+		return
+	}
+	lines := paintHits(d.contentLines(), d.search.hits, d.search.idx)
+	if d.sel.hasRange() {
+		lines = d.sel.paint(lines)
+	}
+	d.vp.SetContent(strings.Join(lines, "\n") + "\n")
+}
+
+func (d *DiffPanel) contentLines() []string {
+	lines := make([]string, len(d.rows))
+	for i, r := range d.rows {
+		lines[i] = r.text
+	}
+	return lines
+}
+
+// BeginSelect starts a drag at a content line and column.
+func (d *DiffPanel) BeginSelect(line, col int) {
+	d.sel.begin(line, col)
+	d.sync()
+}
+
+// ExtendSelect moves the loose end of an in-progress drag.
+func (d *DiffPanel) ExtendSelect(line, col int) {
+	if d.sel.extend(line, col) {
+		d.sync()
+	}
+}
+
+// EndSelect finishes a drag and reports the selected text, empty when the drag
+// never left its starting cell.
+func (d *DiffPanel) EndSelect() string {
+	d.sel.end()
+	d.sync()
+	return d.SelectedText()
+}
+
+// ClearSelection drops any highlight.
+func (d *DiffPanel) ClearSelection() {
+	if d.sel.clear() {
+		d.sync()
+	}
+}
+
+func (d *DiffPanel) HasSelection() bool { return d.sel.done() }
+
+// SelectedText is the plain text under the highlight.
+func (d *DiffPanel) SelectedText() string { return d.sel.text(d.contentLines()) }
 
 // YOffset is the first content line currently visible, for hit-testing.
 func (d *DiffPanel) YOffset() int { return d.vp.YOffset }
@@ -220,12 +301,12 @@ func (d *DiffPanel) HeaderFileAt(contentLine int) string {
 	return ""
 }
 
-// ToggleCollapse folds or unfolds one file.
+// ToggleCollapse opens a folded file or folds an open one.
 func (d *DiffPanel) ToggleCollapse(key string) {
 	if key == "" {
 		return
 	}
-	d.collapsed[key] = !d.collapsed[key]
+	d.open[key] = !d.open[key]
 	d.render()
 }
 
@@ -246,4 +327,37 @@ func (d *DiffPanel) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-func (d *DiffPanel) View() string { return d.vp.View() }
+func (d *DiffPanel) View() string {
+	body := d.vp.View()
+	if d.browsing() {
+		body = d.browserView(d.vp.Height)
+	}
+	out := d.headerRow(d.width) + "\n" + body
+	if d.search.open {
+		out += "\n" + d.searchBar(d.width)
+	}
+	return out
+}
+
+// paintedRow joins already-styled pieces into a row exactly w wide, padding
+// with the theme background. Pieces are rendered separately and never nested:
+// a style inside a style resets the background for everything after it, which
+// is how a row ends up with unpainted gaps in it.
+func paintedRow(w int, pieces ...string) string {
+	used := 0
+	var b strings.Builder
+	for _, p := range pieces {
+		pw := lipgloss.Width(p)
+		if used+pw > w {
+			b.WriteString(clip(p, max(0, w-used)))
+			used = w
+			break
+		}
+		b.WriteString(p)
+		used += pw
+	}
+	if pad := w - used; pad > 0 {
+		b.WriteString(base().Render(strings.Repeat(" ", pad)))
+	}
+	return b.String()
+}

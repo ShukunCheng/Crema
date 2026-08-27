@@ -22,13 +22,28 @@ const (
 
 // SavedSession is one agent as it is written to disk.
 type SavedSession struct {
-	Backend    string               `json:"backend"`
-	Dir        string               `json:"dir"`
-	AgentSID   string               `json:"agent_session_id,omitempty"`
-	Cost       float64              `json:"cost,omitempty"`
-	Permission agent.PermissionMode `json:"permission,omitempty"`
-	Model      string               `json:"model,omitempty"`
-	Blocks     []Block              `json:"blocks,omitempty"`
+	Backend  string  `json:"backend"`
+	Dir      string  `json:"dir"`
+	AgentSID string  `json:"agent_session_id,omitempty"`
+	Cost     float64 `json:"cost,omitempty"`
+	// How full the model's context window was. Saved with the session id it
+	// belongs to: a resumed conversation is still that many tokens long, and
+	// the status bar would otherwise say it knew nothing until the next turn
+	// ended, next to a spend that had carried over.
+	ContextTokens int64                `json:"context_tokens,omitempty"`
+	ContextWindow int64                `json:"context_window,omitempty"`
+	Permission    agent.PermissionMode `json:"permission,omitempty"`
+	Model         string               `json:"model,omitempty"`
+	Name          string               `json:"name,omitempty"`
+	// History is what you typed at this agent, for ↑ in the input box. Saved
+	// apart from the conversation because it outlives it: /clear drops what
+	// the agent knows, not what you asked.
+	History []string `json:"history,omitempty"`
+	// CLICommands is what the backend last reported it has, kept so the /
+	// list is complete from the first keystroke of the next run rather than
+	// only after a turn.
+	CLICommands []string `json:"cli_commands,omitempty"`
+	Blocks      []Block  `json:"blocks,omitempty"`
 }
 
 // State is everything crema remembers between runs.
@@ -106,13 +121,18 @@ func (a *App) StateSnapshot() State {
 	}
 	for _, s := range a.sessions {
 		st.Sessions = append(st.Sessions, SavedSession{
-			Backend:    s.Backend.Name(),
-			Dir:        s.Dir,
-			AgentSID:   s.agentSID,
-			Cost:       s.cost,
-			Permission: s.Permission,
-			Model:      s.Model,
-			Blocks:     trimForSaving(s.tl.Blocks()),
+			Backend:       s.Backend.Name(),
+			Dir:           s.Dir,
+			AgentSID:      s.agentSID,
+			Cost:          s.cost,
+			ContextTokens: s.ctxTokens,
+			ContextWindow: s.ctxWindow,
+			Permission:    s.Permission,
+			Model:         s.Model,
+			Name:          s.Name,
+			History:       s.history,
+			CLICommands:   s.cliCmds,
+			Blocks:        trimForSaving(s.tl.Blocks()),
 		})
 	}
 	return st
@@ -167,6 +187,14 @@ func (a *App) RestoreSessions(st State) (int, []string) {
 		s.agentSID = ss.AgentSID
 		s.cost = ss.Cost
 		s.Model = ss.Model
+		s.Name = ss.Name
+		s.history = ss.History
+		s.cliCmds = ss.CLICommands
+		if ss.AgentSID != "" {
+			// Only alongside a session that will actually be resumed — without
+			// one the next turn starts empty, whatever the last one measured.
+			s.ctxTokens, s.ctxWindow = ss.ContextTokens, ss.ContextWindow
+		}
 		if ss.Permission != "" && backendSupports(backend, ss.Permission) {
 			s.Permission = ss.Permission
 		}

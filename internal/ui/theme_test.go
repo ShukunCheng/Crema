@@ -52,6 +52,9 @@ func TestLightAndDarkPalettesDiffer(t *testing.T) {
 		"Red":     {DarkTheme.Red, LightTheme.Red},
 		"Yellow":  {DarkTheme.Yellow, LightTheme.Yellow},
 		"Surface": {DarkTheme.Surface, LightTheme.Surface},
+		"UserBg":  {DarkTheme.UserBg, LightTheme.UserBg},
+		"AddBg":   {DarkTheme.AddBg, LightTheme.AddBg},
+		"DelBg":   {DarkTheme.DelBg, LightTheme.DelBg},
 	} {
 		if pair[0] == "" || pair[1] == "" {
 			t.Fatalf("%s is unset in one of the palettes", name)
@@ -90,11 +93,11 @@ func TestCtrlLTogglesThemeAndRepaintsCachedViews(t *testing.T) {
 func TestStatusBarShowsAClickableThemeChip(t *testing.T) {
 	restoreTheme(t)
 	SetMode(ModeDark)
-	if !strings.Contains(RenderStatus(StatusData{Agent: "Mock"}, 80), "dark") {
+	if !strings.Contains(RenderStatus(StatusData{Agent: "Mock"}, 80, statusRowsFull), "dark") {
 		t.Fatal("the status bar must show the current mode")
 	}
 	SetMode(ModeLight)
-	if !strings.Contains(RenderStatus(StatusData{Agent: "Mock"}, 80), "light") {
+	if !strings.Contains(RenderStatus(StatusData{Agent: "Mock"}, 80, statusRowsFull), "light") {
 		t.Fatal("the chip must follow the mode")
 	}
 	// the chip sits in the last themeToggleWidth columns
@@ -105,7 +108,7 @@ func TestStatusBarShowsAClickableThemeChip(t *testing.T) {
 	if s, e := ThemeToggleRange(6); s != 0 || e != 0 {
 		t.Fatalf("a too-narrow bar must report no chip, got [%d,%d)", s, e)
 	}
-	if strings.Contains(RenderStatus(StatusData{Agent: "M"}, 6), "[") {
+	if strings.Contains(RenderStatus(StatusData{Agent: "M"}, 6, statusRowsFull), "[") {
 		t.Fatal("a too-narrow bar must not draw a clipped chip")
 	}
 }

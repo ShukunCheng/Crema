@@ -16,8 +16,10 @@ type lineParser interface {
 	SessionID() string
 }
 
-// runCLI spawns bin with args in dir and enforces the adapter contract: the
-// returned channel always ends with exactly one KindTurnEnd, then closes.
+// runCLI spawns bin with args in dir and enforces the adapter contract: at
+// least one KindTurnEnd arrives before the channel closes. More than one is
+// real: a turn that launched an async task is continued when the task ends,
+// and each leg closes with its own result.
 func runCLI(ctx context.Context, bin string, args []string, dir string, extraEnv []string, p lineParser) (<-chan Event, error) {
 	path, err := exec.LookPath(bin)
 	if err != nil {

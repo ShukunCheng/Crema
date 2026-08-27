@@ -206,8 +206,8 @@ func TestQuittingSavesOpenAgents(t *testing.T) {
 	a.resize(140, 30)
 	a.addSession(mk, t.TempDir()).introduce()
 
-	if _, cmd := a.Update(kmsg(tea.KeyCtrlC)); cmd == nil {
-		t.Fatal("ctrl+c should quit")
+	if _, cmd := a.Update(kmsg(tea.KeyCtrlQ)); cmd == nil {
+		t.Fatal("ctrl+q should quit")
 	}
 	if n := len(LoadState().Sessions); n != 2 {
 		t.Fatalf("quitting must save both agents, saved %d", n)
@@ -225,5 +225,51 @@ func TestClosingAnAgentIsRemembered(t *testing.T) {
 	a.Update(kmsg(tea.KeyCtrlW))
 	if n := len(LoadState().Sessions); n != 1 {
 		t.Fatalf("a closed agent must not come back, saved %d", n)
+	}
+}
+
+// Spend survives a restart, so the context size has to as well — a bar that
+// remembers what was paid but not what filled the window reads as broken.
+func TestContextSurvivesARestart(t *testing.T) {
+	dir := t.TempDir()
+	a := testApp(t)
+	s := a.cur()
+	s.Dir = dir
+	s.agentSID, s.cost = "sess-1", 3.5
+	s.ctxTokens, s.ctxWindow = 41922, 200000
+	if err := SaveState(a.StateSnapshot()); err != nil {
+		t.Fatal(err)
+	}
+
+	b := testApp(t)
+	b.sessions = nil
+	if n, _ := b.RestoreSessions(LoadState()); n != 1 {
+		t.Fatalf("restored %d agents", n)
+	}
+	r := b.cur()
+	if r.ctxTokens != 41922 || r.ctxWindow != 200000 {
+		t.Fatalf("context not restored: %d of %d", r.ctxTokens, r.ctxWindow)
+	}
+	if !strings.Contains(stripSGR(b.statusLine()), "21%") {
+		t.Fatalf("the bar should know how full the window is:\n%s", stripSGR(b.statusLine()))
+	}
+}
+
+// Without a session to resume there is nothing to remember: the next turn
+// starts empty however big the last one got.
+func TestContextIsNotRestoredWithoutASessionToResume(t *testing.T) {
+	dir := t.TempDir()
+	a := testApp(t)
+	s := a.cur()
+	s.Dir = dir
+	s.ctxTokens, s.ctxWindow = 41922, 200000 // but no agentSID
+	if err := SaveState(a.StateSnapshot()); err != nil {
+		t.Fatal(err)
+	}
+	b := testApp(t)
+	b.sessions = nil
+	b.RestoreSessions(LoadState())
+	if got := b.cur(); got.ctxTokens != 0 || got.ctxWindow != 0 {
+		t.Fatalf("context carried over without a session: %d of %d", got.ctxTokens, got.ctxWindow)
 	}
 }

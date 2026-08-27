@@ -16,6 +16,16 @@ type Theme struct {
 	// background shows through and switching modes only recolors text.
 	Bg      lipgloss.Color
 	Surface lipgloss.Color // status bar, set slightly off Bg
+	// The three bands crema paints behind whole rows: what you typed, and the
+	// lines a change added or removed. A tint reads as a band at a glance,
+	// which coloured text alone does not — and a diff is the one thing worth
+	// finding without reading.
+	UserBg lipgloss.Color
+	AddBg  lipgloss.Color
+	DelBg  lipgloss.Color
+	// Track is the unfilled part of a status-bar gauge: a shade off Surface,
+	// so the bar reads as a bar even at 0%.
+	Track lipgloss.Color
 }
 
 // base is the starting point for every style in the package: it paints the
@@ -24,6 +34,17 @@ func base() lipgloss.Style { return lipgloss.NewStyle().Background(T.Bg) }
 
 // fg is base plus a foreground color.
 func fg(c lipgloss.Color) lipgloss.Style { return base().Foreground(c) }
+
+// addLine and delLine are how a changed line looks wherever it appears — in
+// the conversation when an agent edits a file, and in the diff pane. One
+// definition, so the two panes cannot drift apart.
+func addLine() lipgloss.Style {
+	return lipgloss.NewStyle().Background(T.AddBg).Foreground(T.Green)
+}
+
+func delLine() lipgloss.Style {
+	return lipgloss.NewStyle().Background(T.DelBg).Foreground(T.Red)
+}
 
 // pane is a rounded box in theme colors, border included.
 func pane(border lipgloss.Color) lipgloss.Style {
@@ -84,6 +105,10 @@ var DarkTheme = Theme{
 	Yellow:  lipgloss.Color("#ffd9a0"),
 	Bg:      lipgloss.Color("#17121f"),
 	Surface: lipgloss.Color("#2a2136"),
+	UserBg:  lipgloss.Color("#2b2733"),
+	AddBg:   lipgloss.Color("#16341f"),
+	DelBg:   lipgloss.Color("#3b1a23"),
+	Track:   lipgloss.Color("#3b3049"),
 }
 
 // LightTheme keeps the same hues but darkens them enough to stay legible on a
@@ -100,6 +125,10 @@ var LightTheme = Theme{
 	Yellow:  lipgloss.Color("#7a5400"),
 	Bg:      lipgloss.Color("#faf7fd"),
 	Surface: lipgloss.Color("#e7dff0"),
+	UserBg:  lipgloss.Color("#eceaf2"),
+	AddBg:   lipgloss.Color("#d8f5e0"),
+	DelBg:   lipgloss.Color("#fbdde3"),
+	Track:   lipgloss.Color("#cdc0dd"),
 }
 
 // T is the active palette.

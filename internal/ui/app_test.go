@@ -58,28 +58,28 @@ func pump(t *testing.T, a *App, cmd tea.Cmd) {
 }
 
 func TestComputeLayoutDropsPanesAsTerminalNarrows(t *testing.T) {
-	tiny := ComputeLayout(64, 24, true, true)
+	tiny := ComputeLayout(64, 24, InputHeight, true, DiffSide)
 	if tiny.ShowSidebar || tiny.ShowDiff {
 		t.Fatalf("64 cols must show neither optional pane: %+v", tiny)
 	}
-	if tiny.TimelineW != 64 || tiny.PaneH != 20 {
-		t.Fatalf("layout = %+v, want timeline 64 / paneH 20", tiny)
+	if want := 24 - InputHeight - StatusRows(24); tiny.TimelineW != 64 || tiny.PaneH != want {
+		t.Fatalf("layout = %+v, want timeline 64 / paneH %d", tiny, want)
 	}
-	narrow := ComputeLayout(80, 24, true, true)
+	narrow := ComputeLayout(80, 24, InputHeight, true, DiffSide)
 	if !narrow.ShowSidebar || narrow.ShowDiff {
 		t.Fatalf("80 cols: sidebar available, diff not; got %+v", narrow)
 	}
 	if narrow.SidebarW+narrow.TimelineW != 80 {
 		t.Fatalf("widths must fill the terminal: %+v", narrow)
 	}
-	mid := ComputeLayout(100, 30, true, true)
+	mid := ComputeLayout(100, 30, InputHeight, true, DiffSide)
 	if !mid.ShowSidebar || mid.ShowDiff {
 		t.Fatalf("100 cols: sidebar yes, diff no; got %+v", mid)
 	}
 	if mid.SidebarW+mid.TimelineW != 100 {
 		t.Fatalf("widths must fill the terminal: %+v", mid)
 	}
-	wide := ComputeLayout(140, 40, true, true)
+	wide := ComputeLayout(140, 40, InputHeight, true, DiffSide)
 	if !wide.ShowSidebar || !wide.ShowDiff {
 		t.Fatalf("140 cols must show both: %+v", wide)
 	}
@@ -88,15 +88,66 @@ func TestComputeLayoutDropsPanesAsTerminalNarrows(t *testing.T) {
 	}
 }
 
+// The status bar is the last line of the frame, and the frame is exactly as
+// tall as the terminal — whatever the panes do. A frame that came out a line
+// too tall would push the buttons off the bottom of the screen.
+func TestTheFrameIsAlwaysTheHeightOfTheTerminalWithTheStatusBarLast(t *testing.T) {
+	a := testApp(t)
+	for _, size := range [][2]int{{140, 40}, {80, 24}, {200, 60}, {64, 10}, {140, 40}} {
+		a.resize(size[0], size[1])
+		lines := strings.Split(a.View(), "\n")
+		if len(lines) != size[1] {
+			t.Fatalf("%dx%d: frame is %d lines", size[0], size[1], len(lines))
+		}
+		bar := stripSGR(strings.Join(lines[len(lines)-StatusRows(size[1]):], "\n"))
+		if !strings.Contains(bar, "Mock") {
+			t.Fatalf("%dx%d: the last lines are not the status bar: %q", size[0], size[1], bar)
+		}
+		if !strings.Contains(stripSGR(lines[len(lines)-1]), themeChip()) {
+			t.Fatalf("%dx%d: the buttons must be on the very last line: %q",
+				size[0], size[1], stripSGR(lines[len(lines)-1]))
+		}
+	}
+}
+
+// fitFrame is the guard that guarantees it, so it is checked on its own too.
+func TestFitFrameKeepsTheBottom(t *testing.T) {
+	over := fitFrame("one\ntwo\nthree\nfour", 2)
+	if over != "three\nfour" {
+		t.Fatalf("too tall: got %q, want the last two lines", over)
+	}
+	under := fitFrame("one\ntwo", 4)
+	if under != "\n\none\ntwo" {
+		t.Fatalf("too short: got %q, want it padded from the top", under)
+	}
+	if same := fitFrame("one\ntwo", 2); same != "one\ntwo" {
+		t.Fatalf("exact fit changed: %q", same)
+	}
+}
+
+// A resize repaints the screen rather than trusting what is already on it.
+func TestResizeAsksForAFullRepaint(t *testing.T) {
+	a := testApp(t)
+	_, cmd := a.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if cmd == nil {
+		t.Fatal("a resize must come with a repaint")
+	}
+	// The message type is bubbletea's own and unexported, so compare against
+	// what its ClearScreen command produces.
+	if got, want := cmd(), tea.ClearScreen(); got != want {
+		t.Fatalf("resize returned %T, want %T", got, want)
+	}
+}
+
 func TestComputeLayoutRespectsToggles(t *testing.T) {
-	noSide := ComputeLayout(140, 40, false, true)
+	noSide := ComputeLayout(140, 40, InputHeight, false, DiffSide)
 	if noSide.ShowSidebar || noSide.SidebarW != 0 {
 		t.Fatalf("sidebar toggled off: %+v", noSide)
 	}
 	if noSide.TimelineW+noSide.DiffW != 140 {
 		t.Fatalf("widths must still fill: %+v", noSide)
 	}
-	neither := ComputeLayout(140, 40, false, false)
+	neither := ComputeLayout(140, 40, InputHeight, false, DiffHidden)
 	if neither.TimelineW != 140 {
 		t.Fatalf("timeline should take the whole width: %+v", neither)
 	}
@@ -142,7 +193,7 @@ func TestFullTurnFlowsThroughTheActiveSession(t *testing.T) {
 		t.Fatal("TurnEnd must clear busy")
 	}
 	c := s.tl.Content()
-	for _, want := range []string{"make a file", "hello.txt", "Bash"} {
+	for _, want := range []string{"make a file", "hello.txt", "Ran 2 shell commands"} {
 		if !strings.Contains(c, want) {
 			t.Fatalf("timeline missing %q:\n%s", want, c)
 		}

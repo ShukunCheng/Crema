@@ -37,7 +37,11 @@ type Line struct {
 
 type Hunk struct {
 	Header string
-	Lines  []Line
+	// OldStart and NewStart are the first line numbers the hunk covers on each
+	// side, as given by its @@ header. 0 when the header didn't say.
+	OldStart int
+	NewStart int
+	Lines    []Line
 }
 
 type File struct {
@@ -53,10 +57,14 @@ type File struct {
 }
 
 type DiffSet struct {
-	Repo      string
+	Repo string
+	// Branch is what HEAD points at, or its short hash when detached. The
+	// status bar shows it; nothing else needs it.
+	Branch    string
 	Files     []File
 	Additions int
 	Deletions int
+	Untracked int
 	Err       string
 }
 
@@ -69,6 +77,7 @@ func Collect(dir string) DiffSet {
 		return ds
 	}
 	ds.Repo = strings.TrimSpace(top)
+	ds.Branch = branch(dir)
 
 	staged, err := git(dir, "diff", "--cached", "--no-color", "--no-ext-diff", "-M", "--unified=3")
 	if err != nil {
@@ -87,6 +96,7 @@ func Collect(dir string) DiffSet {
 		for _, rel := range strings.Split(others, "\x00") {
 			if rel != "" {
 				ds.Files = append(ds.Files, untracked(ds.Repo, rel))
+				ds.Untracked++
 			}
 		}
 	}
@@ -95,6 +105,68 @@ func Collect(dir string) DiffSet {
 		ds.Deletions += f.Deletions
 	}
 	return ds
+}
+
+// ListFiles names the files in the working tree, relative to dir and with
+// forward slashes, for the input box's @-file completion. git is asked first:
+// it honours .gitignore, so the answer is the project rather than its build
+// output, and it costs one process. A directory that isn't a repo is walked
+// instead, skipping the dot-directories and vendor dumps nobody means to
+// mention. At most limit paths come back.
+func ListFiles(dir string, limit int) []string {
+	if out, err := git(dir, "ls-files", "--cached", "--others", "--exclude-standard", "-z"); err == nil {
+		var files []string
+		for _, p := range strings.Split(out, "\x00") {
+			if p == "" {
+				continue
+			}
+			if files = append(files, p); len(files) >= limit {
+				break
+			}
+		}
+		return files
+	}
+	return walkFiles(dir, limit)
+}
+
+func walkFiles(dir string, limit int) []string {
+	var files []string
+	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // an unreadable corner of the tree is not worth reporting
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if p != dir && (strings.HasPrefix(name, ".") || name == "node_modules") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return nil
+		}
+		files = append(files, filepath.ToSlash(rel))
+		if len(files) >= limit {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return files
+}
+
+// branch names the checked-out branch. A detached HEAD has no name, so its
+// short hash stands in; a repo with no commit yet has neither and comes back
+// empty rather than as an error the caller has to think about.
+func branch(dir string) string {
+	if out, err := git(dir, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil {
+		return strings.TrimSpace(out)
+	}
+	out, err := git(dir, "rev-parse", "--short", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }
 
 func git(dir string, args ...string) (string, error) {
@@ -148,6 +220,7 @@ func untracked(repo, rel string) File {
 		h.Lines = append(h.Lines, Line{Kind: LineAdd, Text: r})
 	}
 	h.Header = "@@ -0,0 +1," + strconv.Itoa(len(rows)) + " @@"
+	h.NewStart = 1
 	f.Hunks = []Hunk{h}
 	f.Additions = len(rows)
 	return f
@@ -170,7 +243,9 @@ func ParseUnified(raw string, staged bool) []File {
 		case cur < 0:
 			// preamble before the first file header
 		case strings.HasPrefix(ln, "@@"):
-			files[cur].Hunks = append(files[cur].Hunks, Hunk{Header: hunkHeader(ln)})
+			old, nw := hunkStarts(ln)
+			files[cur].Hunks = append(files[cur].Hunks,
+				Hunk{Header: hunkHeader(ln), OldStart: old, NewStart: nw})
 			hi = len(files[cur].Hunks) - 1
 		case hi < 0 && strings.HasPrefix(ln, "--- "):
 			if p := strings.TrimPrefix(ln, "--- "); p != "/dev/null" {
@@ -209,6 +284,29 @@ func ParseUnified(raw string, staged bool) []File {
 		}
 	}
 	return files
+}
+
+// hunkStarts pulls the two starting line numbers out of "@@ -a,b +c,d @@".
+// Both are 0 when the header is malformed, which only costs the split view its
+// line-number gutters.
+func hunkStarts(ln string) (old, nw int) {
+	fields := strings.Fields(ln)
+	if len(fields) < 3 {
+		return 0, 0
+	}
+	return lineNo(fields[1], "-"), lineNo(fields[2], "+")
+}
+
+func lineNo(field, sign string) int {
+	field = strings.TrimPrefix(field, sign)
+	if i := strings.IndexByte(field, ','); i >= 0 {
+		field = field[:i]
+	}
+	n, err := strconv.Atoi(field)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // hunkHeader keeps "@@ -a,b +c,d @@" and drops the trailing function context,

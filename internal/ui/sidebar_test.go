@@ -19,7 +19,7 @@ func sidebarSessions(t *testing.T) []*Session {
 }
 
 func TestSidebarListsAgentsWithStateAndNewRow(t *testing.T) {
-	out := RenderSidebar(sidebarSessions(t), 0, "⠋", 22, 10)
+	out := RenderSidebar(sidebarSessions(t), 0, noDrag, "⠋", SidebarWidth-2, 10)
 	for _, want := range []string{"AGENTS", "alpha", "beta", "idle", NewAgentRow, "▸"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("sidebar missing %q:\n%s", want, out)
@@ -34,7 +34,7 @@ func TestSidebarListsAgentsWithStateAndNewRow(t *testing.T) {
 }
 
 func TestSidebarMarksTheActiveAgentOnly(t *testing.T) {
-	out := RenderSidebar(sidebarSessions(t), 1, "⠋", 22, 10)
+	out := RenderSidebar(sidebarSessions(t), 1, noDrag, "⠋", SidebarWidth-2, 10)
 	if strings.Count(out, "▸") != 1 {
 		t.Fatalf("exactly one active marker expected:\n%s", out)
 	}
@@ -47,7 +47,7 @@ func TestSidebarMarksTheActiveAgentOnly(t *testing.T) {
 
 func TestSidebarIsExactlyTheRequestedSize(t *testing.T) {
 	for _, dims := range [][2]int{{22, 10}, {22, 4}, {14, 8}, {40, 20}} {
-		out := RenderSidebar(sidebarSessions(t), 0, "⠋", dims[0], dims[1])
+		out := RenderSidebar(sidebarSessions(t), 0, noDrag, "⠋", dims[0], dims[1])
 		lines := strings.Split(out, "\n")
 		if len(lines) != dims[1] {
 			t.Fatalf("w=%d h=%d: %d lines, want %d", dims[0], dims[1], len(lines), dims[1])
@@ -61,7 +61,7 @@ func TestSidebarIsExactlyTheRequestedSize(t *testing.T) {
 }
 
 func TestSidebarHandlesNoSessions(t *testing.T) {
-	out := RenderSidebar(nil, 0, "⠋", 22, 6)
+	out := RenderSidebar(nil, 0, noDrag, "⠋", SidebarWidth-2, 6)
 	if !strings.Contains(out, NewAgentRow) {
 		t.Fatalf("the new-agent row must always be offered:\n%s", out)
 	}

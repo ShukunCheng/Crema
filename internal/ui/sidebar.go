@@ -7,8 +7,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// SidebarWidth is the sidebar's total width including its border.
-const SidebarWidth = 24
+// SidebarWidth is the sidebar's total width including its border. Two columns
+// of it belong to the × that closes an agent, and it was widened by that much
+// when the × arrived rather than take the room out of the names.
+const SidebarWidth = 26
 
 // NewAgentRow is the label of the row that opens the new-agent picker.
 const NewAgentRow = "+ new agent"
@@ -33,6 +35,15 @@ const (
 	SidebarNewAgent
 )
 
+// closeWidth is the room the × takes at the right of an agent's row: the
+// glyph and the space before it.
+const closeWidth = 2
+
+// SidebarCloseCol is the first column of that ×, counted from the left of the
+// sidebar's content area. A click at or past it closes the agent instead of
+// selecting it.
+func SidebarCloseCol(w int) int { return w - closeWidth }
+
 // SidebarRowOf is the inverse of SidebarRowAt for session rows.
 func SidebarRowOf(sessionIndex int) int { return sidebarTitleRows + sessionIndex }
 
@@ -52,8 +63,12 @@ func SidebarRowAt(sessionCount, row int) (SidebarTarget, int) {
 }
 
 // RenderSidebar lists every open agent with its live state. w and h are the
-// content area (inside the border); the result is exactly h lines of w columns.
-func RenderSidebar(sessions []*Session, active int, spin string, w, h int) string {
+// content area (inside the border); the result is exactly h lines of w
+// columns. dragging is the row being carried by the mouse, noDrag for none:
+// it is painted as a lifted block — the user band behind it, a grab mark in
+// the margin — so the row in hand reads as in hand while the rest of the
+// list reflows around the pointer.
+func RenderSidebar(sessions []*Session, active, dragging int, spin string, w, h int) string {
 	if w <= 0 || h <= 0 {
 		return ""
 	}
@@ -62,12 +77,17 @@ func RenderSidebar(sessions []*Session, active int, spin string, w, h int) strin
 	idle := fg(T.Lilac).Width(w)
 	run := fg(T.Green).Width(w)
 	dim := fg(T.Muted).Width(w)
+	lift := lipgloss.NewStyle().Background(T.UserBg).Foreground(T.Pink).Bold(true)
+	liftDim := lipgloss.NewStyle().Background(T.UserBg).Foreground(T.Muted)
 
 	lines := []string{title.Render(clip("AGENTS", w))}
 	for i, s := range sessions {
 		marker := "  "
 		if i == active {
 			marker = "▸ "
+		}
+		if i == dragging {
+			marker = "▌ " // the grab mark: this row is in hand
 		}
 		state := "idle"
 		st := idle
@@ -77,21 +97,27 @@ func RenderSidebar(sessions []*Session, active int, spin string, w, h int) strin
 		}
 		// index prefix doubles as the alt+N jump hint
 		head := fmt.Sprintf("%s%d %s", marker, i+1, s.Title())
-		room := w - lipgloss.Width(state) - 1
+		// The × is drawn separately so it can keep its own colour, which
+		// leaves the rest of the row this much narrower.
+		body := SidebarCloseCol(w)
+		room := body - lipgloss.Width(state) - 1
 		if room < 1 {
 			room = 1
 		}
 		head = clip(head, room)
-		pad := w - lipgloss.Width(head) - lipgloss.Width(state)
+		pad := body - lipgloss.Width(head) - lipgloss.Width(state)
 		if pad < 1 {
 			pad = 1
 		}
-		row := head + strings.Repeat(" ", pad) + state
+		row := clip(head+strings.Repeat(" ", pad)+state, body)
+		style, closer := st, dim
 		if i == active {
-			lines = append(lines, sel.Render(clip(row, w)))
-		} else {
-			lines = append(lines, st.Render(clip(row, w)))
+			style = sel
 		}
+		if i == dragging {
+			style, closer = lift, liftDim
+		}
+		lines = append(lines, style.Width(body).Render(row)+closer.Width(closeWidth).Render(" ×"))
 	}
 	lines = append(lines, "")
 	lines = append(lines, dim.Render(clip(NewAgentRow+"  ^n", w)))

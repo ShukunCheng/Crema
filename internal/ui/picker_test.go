@@ -21,7 +21,8 @@ func (u unavailableAgent) Available() error { return errors.New(u.name + " CLI n
 func (u unavailableAgent) Modes() []agent.PermissionMode {
 	return []agent.PermissionMode{agent.PermissionDefault, agent.PermissionAcceptEdits}
 }
-func (u unavailableAgent) Models() []string { return []string{agent.DefaultModel} }
+func (u unavailableAgent) Models() []string                { return []string{agent.DefaultModel} }
+func (u unavailableAgent) Commands(string) []agent.Command { return nil }
 func (u unavailableAgent) Run(context.Context, agent.RunOptions) (<-chan agent.Event, error) {
 	return nil, errors.New("unavailable")
 }

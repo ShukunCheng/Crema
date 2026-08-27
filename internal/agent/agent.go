@@ -15,8 +15,10 @@ const (
 	KindText       Kind = iota // assistant prose (Thinking=true → reasoning channel)
 	KindToolCall               //
 	KindToolOutput             //
-	KindTurnEnd                // ALWAYS the final event before the channel closes
+	KindTurnEnd                // ends a leg of the turn; the last one precedes the close
 	KindError                  // non-fatal error surfaced mid-stream
+	KindReady                  // the backend's opening report about itself
+	KindTask                   // a background task's lifecycle: subagents and backgrounded commands
 )
 
 type Event struct {
@@ -26,6 +28,37 @@ type Event struct {
 	Tool     *ToolCall   // KindToolCall
 	Output   *ToolOutput // KindToolOutput
 	Result   *TurnResult // KindTurnEnd
+	// OutTokens is how much the model has written this turn so far, running
+	// total, when the backend says as it goes. 0 means it hasn't said — which
+	// is every event from a backend that only reports at the end.
+	OutTokens int64
+	// Commands is every slash command this backend has, by its own account.
+	// KindReady only.
+	Commands []string
+	// SubID names the tool call whose subagent produced this event — the
+	// parent Task/Agent id the CLI tags nested work with. Empty for the main
+	// conversation.
+	SubID string
+	// Task is a background task's lifecycle update. KindTask only.
+	Task *TaskUpdate
+}
+
+// TaskUpdate is one report about a background task — a subagent the model
+// launched, or a command it backgrounded. The CLI sends these as it goes:
+// started, progress heartbeats, and a completion that names the file the
+// task's full output went to. Fields are sparse; each update carries what
+// that report knew.
+type TaskUpdate struct {
+	ID         string // the CLI's own task id
+	ToolUseID  string // the tool call that launched it
+	Type       string // "general-purpose", "local_bash", …
+	Desc       string
+	Status     string // running | completed | failed
+	LastTool   string // what the subagent is running right now
+	Tokens     int64  // the subagent's own spend so far
+	ToolUses   int
+	OutputFile string // where the CLI wrote the task's full output
+	Summary    string // the task's own closing words
 }
 
 type ToolCall struct {
@@ -43,9 +76,20 @@ type ToolOutput struct {
 // RateLimit is the usage window the backend reports, e.g. Claude Code's
 // rolling five-hour and seven-day allowances.
 type RateLimit struct {
-	Type        string    // backend's window id, e.g. "five_hour"
-	Utilization float64   // 0..1 of the window consumed
+	Type string // backend's window id, e.g. "five_hour"
+	// Utilization is 0..1 of the window consumed, and only means anything when
+	// Known is set. Claude Code 2.1.229 reports the window and its reset time
+	// on every turn but no longer reports a percentage, so an unknown share is
+	// the normal case rather than an error — and 0% would be a lie.
+	Utilization float64
+	Known       bool
 	ResetsAt    time.Time // zero when the backend didn't say
+	Status      string    // the backend's own word for it: "allowed", …
+	// Surpassed is the warning line the window has crossed, 0.75 and up, sent
+	// when the CLI thinks it is worth mentioning. It is not the utilization —
+	// only a floor under it — but it is the one figure a headless run gets at
+	// the point where the answer starts to matter.
+	Surpassed float64
 }
 
 // Label shortens the backend's window id for the status bar.
@@ -135,6 +179,20 @@ type RunOptions struct {
 	Model      string // "" = the CLI's configured default
 }
 
+// ModelDescriber is a backend that can say what its model aliases resolve to
+// and what each is good for. Optional: a backend without notes lists bare
+// names, which is what crema did before any of them had anything to say.
+type ModelDescriber interface {
+	DescribeModel(model string) string
+}
+
+// UsageReporter is a backend that can say how much of the subscription's
+// allowance is gone. Separate from Agent because it is a property of the
+// account rather than of a turn, and not every backend has one.
+type UsageReporter interface {
+	Usage() []RateLimit
+}
+
 type Agent interface {
 	Name() string  // stable id: "claude" | "codex" | "mock"
 	Label() string // display: "Claude Code" | "Codex" | "Mock"
@@ -144,5 +202,8 @@ type Agent interface {
 	Modes() []PermissionMode
 	// Models lists selectable model aliases. DefaultModel is always first.
 	Models() []string
+	// Commands lists the slash commands and skills installed for dir, so crema
+	// can offer them instead of making the user remember what is there.
+	Commands(dir string) []Command
 	Run(ctx context.Context, opts RunOptions) (<-chan Event, error)
 }

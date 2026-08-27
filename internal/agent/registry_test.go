@@ -17,7 +17,8 @@ func (f fakeAgent) Available() error { return f.err }
 func (f fakeAgent) Modes() []PermissionMode {
 	return []PermissionMode{PermissionDefault, PermissionAcceptEdits}
 }
-func (f fakeAgent) Models() []string { return []string{DefaultModel} }
+func (f fakeAgent) Models() []string          { return []string{DefaultModel} }
+func (f fakeAgent) Commands(string) []Command { return nil }
 func (f fakeAgent) Run(context.Context, RunOptions) (<-chan Event, error) {
 	return nil, errors.New("not implemented")
 }

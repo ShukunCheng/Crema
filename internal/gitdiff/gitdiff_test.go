@@ -145,6 +145,29 @@ func TestParseUnifiedBinaryAndDeleted(t *testing.T) {
 	}
 }
 
+// The split view numbers its gutters from the @@ header, so the starting line
+// of each side has to survive parsing.
+func TestParseUnifiedKeepsHunkStartLines(t *testing.T) {
+	raw := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n" +
+		"@@ -14,7 +20,8 @@ func main() {\n context\n-old\n+new\n" +
+		"@@ -1 +1 @@\n-a\n+b\n"
+	hunks := ParseUnified(raw, false)[0].Hunks
+	if len(hunks) != 2 {
+		t.Fatalf("got %d hunks", len(hunks))
+	}
+	if hunks[0].OldStart != 14 || hunks[0].NewStart != 20 {
+		t.Fatalf("hunk 0 starts %d/%d, want 14/20", hunks[0].OldStart, hunks[0].NewStart)
+	}
+	// A single-line hunk has no comma in its range.
+	if hunks[1].OldStart != 1 || hunks[1].NewStart != 1 {
+		t.Fatalf("hunk 1 starts %d/%d, want 1/1", hunks[1].OldStart, hunks[1].NewStart)
+	}
+	// The header itself still drops the trailing function context.
+	if hunks[0].Header != "@@ -14,7 +20,8 @@" {
+		t.Fatalf("header = %q", hunks[0].Header)
+	}
+}
+
 func TestParseUnifiedDoesNotMistakeBodyLinesForHeaders(t *testing.T) {
 	// A removed line whose content starts with "-- " renders as "--- " in the body.
 	raw := "diff --git a/x.md b/x.md\nindex 1..2 100644\n--- a/x.md\n+++ b/x.md\n@@ -1,3 +1,3 @@\n context\n--- signature\n+++ new signature\n"
@@ -159,5 +182,40 @@ func TestParseUnifiedDoesNotMistakeBodyLinesForHeaders(t *testing.T) {
 	}
 	if lines[2].Kind != LineAdd || lines[2].Text != "++ new signature" {
 		t.Fatalf("add line: %+v", lines[2])
+	}
+}
+
+// The status bar names the branch and counts what git isn't tracking yet.
+func TestCollectReportsBranchAndUntrackedCount(t *testing.T) {
+	dir := newRepo(t)
+	write(t, dir, "a.txt", "one\n")
+	gitRun(t, dir, "add", "a.txt")
+	gitRun(t, dir, "commit", "-qm", "init")
+	write(t, dir, "new1.txt", "x\n")
+	write(t, dir, "new2.txt", "y\n")
+
+	ds := Collect(dir)
+	if ds.Branch != "main" {
+		t.Fatalf("Branch = %q, want main", ds.Branch)
+	}
+	if ds.Untracked != 2 {
+		t.Fatalf("Untracked = %d, want 2", ds.Untracked)
+	}
+
+	// A detached HEAD has no branch name, so the hash stands in for one.
+	gitRun(t, dir, "checkout", "-q", "--detach")
+	if b := Collect(dir).Branch; b == "" || b == "main" {
+		t.Fatalf("detached HEAD should report a hash, got %q", b)
+	}
+}
+
+// A repo with no commit yet has no branch to name and must not error out.
+func TestCollectOnAnEmptyRepoHasNoBranch(t *testing.T) {
+	ds := Collect(newRepo(t))
+	if ds.Err != "" {
+		t.Fatalf("an empty repo is not an error: %q", ds.Err)
+	}
+	if ds.Branch != "main" && ds.Branch != "" {
+		t.Fatalf("Branch = %q", ds.Branch)
 	}
 }
