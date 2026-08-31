@@ -155,9 +155,9 @@ func TestClickingAButtonAndThenAValue(t *testing.T) {
 		t.Fatalf("clicking the permissions button should open it: idx=%d open=%v", c.idx, c.Open())
 	}
 
-	// With the list open the row moved down by the height of the box.
-	top := a.lay.PaneH - a.dropUpHeight()
-	a.Update(click(4, top+1)) // first value inside the border
+	// The open list holds the bottom strip, where the status bar was.
+	top := a.h - c.ListHeight()
+	a.Update(click(4, top+1)) // the first value, just under the title
 	if s.Permission != c.chips[1].options[0].perm {
 		t.Fatalf("Permission = %q, want %q", s.Permission, c.chips[1].options[0].perm)
 	}
@@ -210,12 +210,14 @@ func TestTheModelListSaysWhatEachOneIs(t *testing.T) {
 	if len(rows) != 5 {
 		t.Fatalf("rows = %q", rows)
 	}
+	// The notes name no generation: an alias is whatever the CLI resolves it
+	// to today, and pinning "Opus 5" here would be a lie the day Opus 6 ships.
 	for i, want := range []string{
-		"1. ✓ default  whatever the CLI is configured to use",
-		"2.   opus     Opus 5 with 1M context",
-		"3.   fable    Fable 5",
-		"4.   sonnet   Sonnet 5",
-		"5.   haiku    Haiku 4.5",
+		"1. ✓ default  whatever the CLI resolves",
+		"2.   opus     Opus with 1M context",
+		"3.   fable    Fable",
+		"4.   sonnet   Sonnet",
+		"5.   haiku    Haiku",
 	} {
 		if !strings.HasPrefix(rows[i], want) {
 			t.Fatalf("row %d is %q, want it to start %q", i+1, rows[i], want)
@@ -281,5 +283,62 @@ func TestThePermissionListIsNumberedToo(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(rows, "\n"), "file edits apply") {
 		t.Fatalf("the modes should keep their descriptions: %q", rows)
+	}
+}
+
+// The open list takes the status bar's place at the bottom of the frame —
+// choosing is the one thing happening — and gives it back on close, with the
+// panes yielding exactly the difference in rows.
+func TestTheOpenListReplacesTheStatusBar(t *testing.T) {
+	a := testApp(t)
+	a.resize(100, 26)
+	paneH := a.lay.PaneH
+	c := openControls(t, a)
+	if v := stripSGR(a.View()); !strings.Contains(v, "Context") {
+		t.Fatal("buttons alone leave the status bar in place")
+	}
+
+	a.Update(kmsg(tea.KeyEnter)) // open the model list
+	v := stripSGR(a.View())
+	if !strings.Contains(v, "MODEL") || !strings.Contains(v, "1. ✓ default") {
+		t.Fatalf("the picker should hold the bottom strip:\n%s", v)
+	}
+	if strings.Contains(v, "Context") {
+		t.Fatal("the status bar stands aside while a choice is being made")
+	}
+	if lines := strings.Split(a.View(), "\n"); len(lines) != 26 {
+		t.Fatalf("frame is %d rows, want 26 exactly", len(lines))
+	}
+	if want := paneH - (c.ListHeight() - StatusRows(26)); a.lay.PaneH != want {
+		t.Fatalf("PaneH = %d, want %d — the panes yield the difference", a.lay.PaneH, want)
+	}
+
+	a.Update(kmsg(tea.KeyEsc)) // back to the buttons
+	if !strings.Contains(stripSGR(a.View()), "Context") {
+		t.Fatal("closing the list gives the status bar its place back")
+	}
+	if a.lay.PaneH != paneH {
+		t.Fatalf("PaneH = %d, want %d restored", a.lay.PaneH, paneH)
+	}
+}
+
+// A click on a value in the bottom strip applies it, and the strip closes.
+func TestClickingTheBottomStripPicksAValue(t *testing.T) {
+	a := testApp(t)
+	a.resize(100, 26)
+	s := a.cur()
+	c := openControls(t, a)
+	a.Update(kmsg(tea.KeyRight)) // over to permissions
+	a.Update(kmsg(tea.KeyEnter)) // open its list
+	top := a.h - c.ListHeight()
+	a.Update(click(5, top+1)) // the first value: the CLI's own default
+	if s.Permission != c.chips[1].options[0].perm {
+		t.Fatalf("Permission = %q", s.Permission)
+	}
+	if c.Open() {
+		t.Fatal("picking closes the list")
+	}
+	if !strings.Contains(stripSGR(a.View()), "Context") {
+		t.Fatal("and the status bar comes back")
 	}
 }

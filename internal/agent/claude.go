@@ -13,7 +13,23 @@ type Claude struct {
 	extraEnv []string
 }
 
-func NewClaude() *Claude { return &Claude{bin: "claude"} }
+// NewClaude pins the one-hour prompt-cache lifetime. This is belt and
+// braces, not a fix: measured on real traffic, a subscriber's headless runs
+// were already getting the hour — every cache write in a long crema session
+// was filed as ephemeral_1h, both before this flag existed and after. It is
+// kept because the CLI's default rests on a subscriber check that could
+// change, and asking costs nothing.
+//
+// What the cache actually costs crema is elsewhere, and is not fixable from
+// out here: one turn is one `claude -p --resume` process, and a resumed
+// process rebuilds far more of the prefix than a live one keeps. Measured
+// over 92 crema turns against 65 interactive ones, the first call of a crema
+// turn rewrote 59% of its prefix where an interactive turn rewrote 11%. The
+// cure for that is one long-lived process fed by --input-format stream-json,
+// not an environment variable.
+func NewClaude() *Claude {
+	return &Claude{bin: "claude", extraEnv: []string{"ENABLE_PROMPT_CACHING_1H=1"}}
+}
 
 func (c *Claude) Name() string  { return "claude" }
 func (c *Claude) Label() string { return "Claude Code" }
@@ -33,35 +49,6 @@ func (c *Claude) Modes() []PermissionMode {
 
 // Models are the CLI's aliases, which always track the current release —
 // pinning a dated model id here would go stale.
-func (c *Claude) Models() []string {
-	// In the order the CLI's own /model picker lists them.
-	return []string{DefaultModel, "opus", "fable", "sonnet", "haiku"}
-}
-
-// modelNotes is what each alias resolves to and what it is for, in the CLI's
-// own words: copied from what `/model` printed on Claude Code 2.1.229 rather
-// than invented here. A headless run is never told any of this, so crema
-// cannot read it — which means it can go stale when Anthropic ships a new
-// generation. Nothing depends on it beyond the line under the name.
-var modelNotes = map[string]string{
-	"opus":   "Opus 5 with 1M context · best for everyday, complex tasks",
-	"fable":  "Fable 5 · most capable for your hardest and longest-running tasks",
-	"sonnet": "Sonnet 5 · efficient for routine tasks",
-	"haiku":  "Haiku 4.5 · fastest for quick answers",
-}
-
-// DescribeModel says what an alias will get you, or "" when crema has nothing
-// to add. Implements the optional ModelDescriber, so a backend without notes
-// simply lists its names.
-func (c *Claude) DescribeModel(model string) string {
-	if model == DefaultModel {
-		// What that resolves to is the CLI's own configuration, which a
-		// headless run is not told — so crema does not guess at it.
-		return "whatever the CLI is configured to use"
-	}
-	return modelNotes[model]
-}
-
 // claudeMode maps crema's mode onto the CLI's --permission-mode values.
 func claudeMode(p PermissionMode) string {
 	switch p {

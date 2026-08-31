@@ -264,11 +264,26 @@ func (a *App) sessionByID(id int) *Session {
 }
 
 func (a *App) Init() tea.Cmd {
-	cmds := []tea.Cmd{a.in.Focus()}
+	cmds := []tea.Cmd{a.in.Focus(), heartbeat()}
 	for _, s := range a.sessions {
 		cmds = append(cmds, s.collectDiff())
 	}
 	return tea.Batch(cmds...)
+}
+
+// heartbeatMsg wakes an idle crema. Bubbletea only draws when a message
+// arrives, so without one the usage gauges and their reset countdowns froze
+// between keystrokes: the status-line bridge kept writing fresh numbers that
+// nothing re-read until the user happened to touch something.
+type heartbeatMsg struct{}
+
+// heartbeatEvery is the idle redraw cadence. The bridge rewrites the numbers
+// as often as an interactive session renders; ten seconds keeps a visibly
+// moving bar and costs a file stat and a frame.
+const heartbeatEvery = 10 * time.Second
+
+func heartbeat() tea.Cmd {
+	return tea.Tick(heartbeatEvery, func(time.Time) tea.Msg { return heartbeatMsg{} })
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -297,6 +312,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		a.sp, cmd = a.sp.Update(msg)
 		return a, cmd
+
+	case heartbeatMsg:
+		// The refresh itself happens in View, which this message exists to
+		// cause; re-arm and let the frame do the reading.
+		return a, heartbeat()
 
 	case streamStartedMsg:
 		s := a.sessionByID(msg.sess)
@@ -335,12 +355,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case agent.KindToolOutput:
 			cmds = append(cmds, s.scheduleDiff())
 		case agent.KindTurnEnd:
-			// A result ends a leg, not necessarily the turn: an async task
-			// can revive the run for another leg with its own result. Absorb
-			// it and keep listening — the stream closing is the real end.
 			s.noteResult(msg.ev.Result)
 			a.persist() // a finished leg is worth surviving a crash
 			cmds = append(cmds, s.collectDiff())
+			// When the process is held open it stays put between turns, so
+			// its result line is the end of the turn. A process-per-turn run
+			// can produce several results — an async task revives it — so
+			// there the exit is the only honest end.
+			if s.persistent() && s.busy {
+				cmds = append(cmds, a.finishTurn(s)...)
+			}
 		}
 		return a, tea.Batch(cmds...)
 
@@ -349,29 +373,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s == nil || msg.seq != s.streamSeq {
 			return a, nil
 		}
+		// A held-open conversation whose process ends has lost its process,
+		// not its conversation: the CLI keeps the transcript and the next
+		// message resumes it.
+		if s.conv != nil {
+			s.closeConv()
+		}
 		if !s.busy {
 			return a, nil
 		}
-		ended := s.lastResult != nil
-		s.endTurn()
-		if !ended { // adapters guarantee a result; this is the belt-and-braces path
-			s.tl.Append(Block{Kind: BlockError, Text: "the agent stream ended without finishing the turn"})
-			return a, nil
-		}
-		if s.compacting {
-			a.finishCompact(s) // the reply was a summary, not an answer
-		}
-		a.persist()
-		cmds := []tea.Cmd{s.collectDiff()}
-		// Whatever was typed while this turn ran goes now. Only then is
-		// there any point offering the agent's own question — a queued
-		// message is already the answer to it.
-		if q, ok := s.nextQueued(); ok {
-			cmds = append(cmds, s.startTurn(q.shown, q.prompt), a.sp.Tick)
-		} else {
-			a.offerChoices(s)
-		}
-		return a, tea.Batch(cmds...)
+		return a, tea.Batch(a.finishTurn(s)...)
 
 	case diffTickMsg:
 		s := a.sessionByID(msg.sess)
@@ -388,6 +399,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.diffApplied = msg.seq
 		s.diff = msg.ds
 		s.dp.SetDiff(msg.ds)
+		return a, a.maybeCheckPR(s) // the diff just said which branch this is
+	case prMsg:
+		s := a.sessionByID(msg.sess)
+		if s == nil {
+			return a, nil
+		}
+		s.prChecking = false
+		s.pr, s.prBranch, s.prAt = msg.pr, msg.branch, time.Now()
 		return a, nil
 	}
 	return a, a.routeToFocus(msg)
@@ -406,6 +425,7 @@ func (a *App) anyBusy() bool {
 // the model and the permission can both be set in one visit.
 func (a *App) controlsKey(msg tea.KeyMsg) tea.Cmd {
 	chosen, closed := a.controls.Update(msg)
+	defer a.resize(a.w, a.h) // opening or closing the list moves the bottom strip
 	return a.applyControl(chosen, closed)
 }
 
@@ -413,6 +433,7 @@ func (a *App) applyControl(chosen *controlOption, closed bool) tea.Cmd {
 	if closed {
 		a.controls = nil
 		a.focus = focusInput
+		a.resize(a.w, a.h) // the status bar gets its place back
 		return a.in.Focus()
 	}
 	s := a.cur()
@@ -774,6 +795,7 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// draft. The input is re-focused directly — a.focus never left it, so
 		// focusInput would think there was nothing to do.
 		a.controls = nil
+		a.resize(a.w, a.h) // the status bar gets its place back
 		return a, tea.Batch(a.in.Focus(), a.routeToFocus(msg))
 	}
 	if msg.Paste || isTyping(msg) {
@@ -1015,6 +1037,15 @@ func (a *App) routeMouse(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
+// bottomRows is how tall the frame's bottom strip is: the status bar,
+// or the model/permission list that replaces it while one is open.
+func (a *App) bottomRows() int {
+	if a.controls != nil && a.controls.Open() {
+		return a.controls.ListHeight()
+	}
+	return StatusRows(a.h)
+}
+
 // dropUpHeight is how many rows the box floating over the bottom of the panes
 // takes, 0 when there isn't one. Only one is ever up, in this order: what you
 // are typing beats what the agent asked, which beats what is waiting to be
@@ -1192,6 +1223,18 @@ func (a *App) clickTimeline(s *Session, x, y int) tea.Cmd {
 	a.setFocus(focusTimeline)
 	if i := s.tl.HeaderBlockAt(line); i >= 0 {
 		s.tl.ToggleCollapse(i)
+		return nil
+	}
+	// A click that lands on a URL opens it — crema has the mouse, so the
+	// terminal's own ctrl+click was never going to arrive.
+	if _, col := a.timelinePoint(s, x, y); col >= 0 {
+		if u := s.tl.LinkAt(line, col); u != "" {
+			if err := openURL(u); err != nil {
+				a.note = "could not open " + u + ": " + err.Error()
+			} else {
+				a.note = "opened " + u
+			}
+		}
 	}
 	return nil
 }
@@ -1330,6 +1373,17 @@ func (a *App) copySelection(text string) {
 // handleClick makes the whole frame clickable: the sidebar switches or creates
 // agents, the panes take focus, and a block or file header folds.
 func (a *App) handleClick(msg tea.MouseMsg) tea.Cmd {
+	// While a model/permission list holds the bottom strip, clicks there pick
+	// values — and the strip is only that, so nothing else can be under it.
+	if a.controls != nil && a.controls.Open() {
+		if top := a.h - a.controls.ListHeight(); msg.Y >= top {
+			chosen, hit := a.controls.ClickListRow(msg.Y-top, msg.X)
+			cmd := a.applyControl(chosen, false)
+			_ = hit
+			a.resize(a.w, a.h)
+			return cmd
+		}
+	}
 	// The status bar is the last row; its right edge holds the chips.
 	if msg.Y == a.h-1 {
 		if start, end := ThemeToggleRange(a.w); start > 0 && msg.X >= start && msg.X < end {
@@ -1337,6 +1391,16 @@ func (a *App) handleClick(msg tea.MouseMsg) tea.Cmd {
 			a.applyTheme()
 			a.persist()
 			return nil
+		}
+		if s := a.cur(); s != nil && s.pr != nil {
+			if start, end := PRRange(a.w, a.diffView, s.pr); start > 0 && msg.X >= start && msg.X < end {
+				if err := openURL(s.pr.URL); err != nil {
+					a.note = "could not open the PR: " + err.Error()
+				} else {
+					a.note = "opened " + s.pr.URL
+				}
+				return nil
+			}
 		}
 		// While the diff is hidden it has no header to carry its own buttons,
 		// so the way back sits here instead.
@@ -1351,7 +1415,9 @@ func (a *App) handleClick(msg tea.MouseMsg) tea.Cmd {
 		case a.controls != nil:
 			chosen, hit := a.controls.ClickRow(row, msg.X)
 			if hit {
-				return a.applyControl(chosen, false)
+				cmd := a.applyControl(chosen, false)
+				a.resize(a.w, a.h) // a click can open or close the bottom strip
+				return cmd
 			}
 		case a.comp != nil:
 			if a.comp.Click(row) {
@@ -1434,6 +1500,11 @@ func (a *App) resize(w, h int) {
 	a.w, a.h = w, h
 	a.in.SetWidth(w) // before the layout: wrapping decides how tall the box is
 	a.lay = ComputeLayout(w, h, a.in.Height(), a.wantSidebar, a.diffView)
+	// An open model/permission list takes the status bar's place and is
+	// taller than it; the panes give up the difference.
+	if extra := a.bottomRows() - StatusRows(h); extra > 0 {
+		a.lay.PaneH = max(3, a.lay.PaneH-extra)
+	}
 	for _, s := range a.sessions {
 		s.SetSize(a.lay.TimelineW, a.lay.DiffW, a.lay.PaneH)
 		s.dp.SetView(a.diffView)
@@ -1513,6 +1584,7 @@ func (a *App) View() string {
 		// forget; SetPending does nothing when nothing has changed.
 		for _, x := range a.sessions {
 			x.maybeRefreshLimits()
+			x.maybeCloseIdleConv()
 			x.tl.SetStatus(x.workingLine(a.sp.View(), a.lay.TimelineW))
 			x.tl.SetPending(x.Queued())
 		}
@@ -1538,7 +1610,11 @@ func (a *App) View() string {
 	case a.choices != nil:
 		main = overlayBottom(main, a.choices.View(a.w))
 	}
-	return fitFrame(strings.Join([]string{main, a.in.View(), a.statusLine()}, "\n"), a.h)
+	bottom := a.statusLine()
+	if a.controls != nil && a.controls.Open() {
+		bottom = a.controls.ListView(a.w)
+	}
+	return fitFrame(strings.Join([]string{main, a.in.View(), bottom}, "\n"), a.h)
 }
 
 // fitFrame makes the frame exactly as tall as the terminal. The panes are
@@ -1571,7 +1647,7 @@ func (a *App) statusLine() string {
 		Agent: s.Backend.Label(), Mode: s.Permission.Label(), Dir: s.Dir, Diff: a.diffView,
 		Busy: s.busy, Spin: a.sp.View(), Cost: s.cost,
 		Adds: s.diff.Additions, Dels: s.diff.Deletions, Note: a.note,
-		Branch: s.diff.Branch, Untracked: s.diff.Untracked,
+		Branch: s.diff.Branch, Untracked: s.diff.Untracked, PR: s.pr,
 		Model:         s.Model,
 		ContextTokens: s.ctxTokens, ContextWindow: s.ctxWindow, Limits: s.limits,
 	}
@@ -1591,6 +1667,35 @@ func (a *App) statusLine() string {
 		d.ElapsedSec = s.Elapsed().Seconds()
 	}
 	return RenderStatus(d, a.w, StatusRows(a.h))
+}
+
+// finishTurn is everything that happens when a turn is over, wherever the
+// end came from: the process exiting, or — when it is held open across turns
+// — its own result line.
+func (a *App) finishTurn(s *Session) []tea.Cmd {
+	ended, canceled := s.lastResult != nil, s.canceled
+	s.endTurn()
+	switch {
+	case canceled:
+		// The conversation was closed under it; the CLI never got to say so.
+	case !ended: // adapters guarantee a result; this is the belt-and-braces path
+		s.tl.Append(Block{Kind: BlockError, Text: "the agent stream ended without finishing the turn"})
+		return nil
+	}
+	if s.compacting {
+		a.finishCompact(s) // the reply was a summary, not an answer
+	}
+	a.persist()
+	cmds := []tea.Cmd{s.collectDiff()}
+	// Whatever was typed while this turn ran goes now. Only then is there any
+	// point offering the agent's own question — a queued message is already
+	// the answer to it.
+	if q, ok := s.nextQueued(); ok {
+		cmds = append(cmds, s.startTurn(q.shown, q.prompt), a.sp.Tick)
+	} else {
+		a.offerChoices(s)
+	}
+	return cmds
 }
 
 func startStream(ag agent.Agent, ctx context.Context, opts agent.RunOptions, sess, seq int) tea.Cmd {

@@ -74,7 +74,7 @@ func RenderAssistant(text string, w int) string {
 			b.WriteString(drawTable(rows, w))
 			continue
 		}
-		b.WriteString(body(w).Foreground(T.Fg).Render(strings.Join(seg.lines, "\n")) + "\n")
+		b.WriteString(body(w).Foreground(T.Fg).Render(linkify(strings.Join(seg.lines, "\n"))) + "\n")
 	}
 	return b.String()
 }
@@ -108,7 +108,7 @@ func RenderToolOutput(content string, isErr bool, w int) string {
 	if strings.TrimSpace(shown) == "" && cut == 0 {
 		return rail(body(max(1, w-2)).Foreground(T.Muted).Render("(no output)"), railC) + "\n"
 	}
-	txt := body(max(1, w-2)).Foreground(fgc).Render(shown)
+	txt := body(max(1, w-2)).Foreground(fgc).Render(linkify(shown))
 	if cut > 0 {
 		label := fmt.Sprintf("… +%d lines truncated (crema cap %d)", cut, MaxOutputLines)
 		txt += "\n" + body(max(1, w-2)).Foreground(T.Yellow).Bold(true).Render(label)
@@ -122,7 +122,7 @@ func RenderError(text string, w int) string {
 }
 
 func RenderSystem(text string, w int) string {
-	return body(w).Foreground(T.Muted).Italic(true).Render("· "+text) + "\n"
+	return body(w).Foreground(T.Muted).Italic(true).Render("· "+linkify(text)) + "\n"
 }
 
 func RenderStats(r *agent.TurnResult, w int) string {

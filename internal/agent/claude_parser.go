@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 )
@@ -11,8 +12,9 @@ import (
 // Unknown top-level types and malformed lines are counted and skipped, never fatal.
 type ClaudeParser struct {
 	sessionID string
-	rate      *RateLimit // latest rate_limit_event, attached to the next TurnEnd
-	costTotal float64    // the run's cumulative bill so far; results report growth
+	rate      *RateLimit  // the legacy single window of the latest rate_limit_event
+	rates     []RateLimit // its unifiedWindows: every window, percentages included
+	costTotal float64     // the run's cumulative bill so far; results report growth
 	// context is what the last API call of the turn had to read. Every
 	// assistant message carries the usage of the call that produced it, and
 	// the last one is the conversation's size now.
@@ -68,6 +70,13 @@ type claudeRateLimit struct {
 	// SurpassedThreshold is the CLI's own warning line — 0.75 and up — sent
 	// once the window is far enough along to say so.
 	SurpassedThreshold float64 `json:"surpassedThreshold"`
+	// UnifiedWindows arrived after the top-level utilization went away: every
+	// window at once, percentage and reset included, on each event. Measured
+	// live — {"five_hour":{"utilization":0.53,"resetsAt":...},"seven_day":…}.
+	UnifiedWindows map[string]struct {
+		Utilization float64 `json:"utilization"` // 0..1
+		ResetsAt    int64   `json:"resetsAt"`    // unix seconds
+	} `json:"unifiedWindows"`
 }
 
 type claudeMessage struct {
@@ -138,19 +147,31 @@ func (p *ClaudeParser) ParseLine(line []byte) []Event {
 		}
 		return nil // init records the session id above; other subtypes are tolerated
 	case "rate_limit_event":
-		if l.RateLimitInfo != nil {
-			r := RateLimit{
-				Type:      l.RateLimitInfo.RateLimitType,
-				Status:    l.RateLimitInfo.Status,
-				Surpassed: l.RateLimitInfo.SurpassedThreshold,
+		if info := l.RateLimitInfo; info != nil {
+			legacy := RateLimit{
+				Type:      info.RateLimitType,
+				Status:    info.Status,
+				Surpassed: info.SurpassedThreshold,
 			}
-			if u := l.RateLimitInfo.Utilization; u != nil {
-				r.Utilization, r.Known = *u, true
+			if u := info.Utilization; u != nil {
+				legacy.Utilization, legacy.Known = *u, true
 			}
-			if l.RateLimitInfo.ResetsAt > 0 {
-				r.ResetsAt = time.Unix(l.RateLimitInfo.ResetsAt, 0)
+			if info.ResetsAt > 0 {
+				legacy.ResetsAt = time.Unix(info.ResetsAt, 0)
 			}
-			p.rate = &r // surfaced on the next TurnEnd
+			p.rate = &legacy // surfaced on the next TurnEnd
+			p.rates = nil
+			for name, w := range info.UnifiedWindows {
+				r := RateLimit{Type: name, Utilization: w.Utilization, Known: true}
+				if w.ResetsAt > 0 {
+					r.ResetsAt = time.Unix(w.ResetsAt, 0)
+				}
+				if name == info.RateLimitType {
+					r.Status, r.Surpassed = info.Status, info.SurpassedThreshold
+				}
+				p.rates = append(p.rates, r)
+			}
+			sort.Slice(p.rates, func(i, j int) bool { return p.rates[i].ResetsAt.Before(p.rates[j].ResetsAt) })
 		}
 		return nil
 	case "assistant", "user":
@@ -206,6 +227,7 @@ func (p *ClaudeParser) ParseLine(line []byte) []Event {
 		res := TurnResult{
 			SessionID: p.sessionID, DurationMS: l.DurationMS,
 			CostUSD: l.TotalCostUSD - p.costTotal, RateLimit: p.rate,
+			RateLimits: p.rates,
 		}
 		// One run can end more than once: a turn that launched an async task
 		// gets continued when the task finishes, and each leg closes with its

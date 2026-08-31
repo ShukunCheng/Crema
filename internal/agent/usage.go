@@ -137,19 +137,34 @@ func UsagePath() string {
 	return filepath.Join(dir, "crema", "usage.json")
 }
 
-// RecordUsage writes the windows down for the next crema to read. Written
-// atomically, since a status line runs often and crema may read at any moment.
+// RecordUsage writes the windows down for the next crema to read, merged
+// over what is already there: the writers are the status-line bridge and
+// every turn's own rate_limit_event, and either may know about a window the
+// other's last report skipped. Replacing wholesale let a payload that
+// happened to carry only the weekly window erase a five-hour value that was
+// perfectly current. Windows past their reset are dropped, not kept stale.
+// Written atomically, since a status line runs often and crema may read at
+// any moment.
 func RecordUsage(windows []RateLimit) error {
 	p := UsagePath()
 	if p == "" {
 		return errors.New("no user config directory")
 	}
-	recs := make([]usageRecord, 0, len(windows))
+	now := timeNow()
+	merged := map[string]RateLimit{}
+	for _, w := range recordedUsage() { // already drops the expired
+		merged[w.Type] = w
+	}
 	for _, w := range windows {
-		if w.Known {
-			recs = append(recs, usageRecord{w.Type, w.Utilization, w.ResetsAt})
+		if w.Known && (w.ResetsAt.IsZero() || w.ResetsAt.After(now)) {
+			merged[w.Type] = w
 		}
 	}
+	recs := make([]usageRecord, 0, len(merged))
+	for _, w := range merged {
+		recs = append(recs, usageRecord{w.Type, w.Utilization, w.ResetsAt})
+	}
+	sort.Slice(recs, func(i, j int) bool { return recs[i].ResetsAt.Before(recs[j].ResetsAt) })
 	b, err := json.Marshal(recs)
 	if err != nil {
 		return err

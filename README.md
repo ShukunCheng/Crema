@@ -56,7 +56,7 @@ the interface without spending anything.
 | `tab` / `shift+tab` | next / previous agent |
 | `alt+1` … `alt+9` | jump straight to that agent |
 | `ctrl+b` | show/hide the agent sidebar |
-| `↑` (from the input) | walk back through what you have asked this agent; `↓` walks forward again |
+| `↑` (from the input) | walk back through what you have asked this agent; `↓` scrolls forward again — a multi-line entry doesn't interrupt the walk, and typing anything ends it |
 | `↓` (at the end of the history) | highlight the model / permissions buttons above the input; `enter` opens one |
 | `ctrl+p` | the same buttons, from anywhere |
 | drag in the conversation or the diff | select text; copies to the clipboard on release, and `ctrl+c` copies it again |
@@ -113,10 +113,12 @@ The whole interface is clickable:
 | the `[ dark ]` / `[ light ]` chip in the status bar | switch theme |
 | the `side` / `full` / `off` buttons on the diff's header | put the diff at that size |
 | the `[ diff ]` chip in the status bar (only while it's hidden) | bring the diff back |
+| the `[ PR #123 ]` chip in the status bar | open the branch's pull request in the browser |
 | a row in the picker or in a completion list | choose it |
 | a message waiting in the queue | take it back into the input box |
 | the `model` / `permissions` buttons above the input | open that button's values |
 | any pane | focus it (so `pgup`/`pgdn` go there) |
+| a URL in the conversation | open it in the browser — links render underlined; a drag across one still selects |
 | a tool block's header line | fold or unfold that block |
 | a file's header line in the diff | fold or unfold that file |
 | a file in the full-screen list | show that file's diff |
@@ -140,7 +142,11 @@ by what is hidden:
 ▸ Ran 2 shell commands · Read 1 file
 ```
 
-Clicking it opens the whole run at once, never a summary of it. Anything that
+Clicking it opens the whole run at once, never a summary of it — and
+clicking any block of the opened run folds the whole run back, so the gesture
+round-trips instead of leaving the call folded and its output standing.
+Blocks that arrived open — a file edit, a failure — fold alone when clicked;
+they were never part of the run beside them. Anything that
 stays open — prose, a file change, a failure — breaks the run in two, so the
 line always describes exactly the stretch it sits in.
 
@@ -160,7 +166,12 @@ whoever in it did the changing. A subagent's run never merges with the main
 turn's: the summary line says whose work it stands for.
 
 While background work runs, the working line counts it — `… · 2 background
-tasks · esc to cancel` — and `/tasks` lists every subagent and backgrounded
+tasks · esc to cancel` — and the sidebar carries the same count as `+2` on
+that agent's row, because the sidebar is the only place every agent is
+visible at once: an agent whose subagent is grinding away should not look
+like one thinking by itself. A task belongs to the run that launched it, so
+if the CLI exits without ever saying how one ended, it stops being counted
+rather than haunting the list. `/tasks` lists every subagent and backgrounded
 command of the session: status, what it was asked, its spend so far, and what
 it is running right now. `/tasks <id>` reads the tail of the output file the
 CLI keeps for it, so a long-running subagent can be looked in on before it
@@ -313,6 +324,14 @@ sketched here with `█` and `░` because a README has no colour:
 **Who and where.** The focused agent (with `[1/2]` when several are open), its
 model, the working directory, and that directory's git state: branch, `*` when
 it's dirty, then the lines added and removed and the files git isn't tracking.
+
+**The branch's pull request.** When `gh` knows the current branch has one, a
+`[ PR #123 ]` chip joins the buttons on the mode row — green while open, muted
+`draft`, purple `merged`, red `closed` — and clicking it opens the PR in the
+browser. The answer comes from `gh pr view` run in the agent's directory (gh
+holds the auth; crema never touches a credential), cached per branch and
+re-asked every few minutes, so the bar never blocks on the network and GitHub
+is asked rarely. No `gh`, no repo, or no PR simply means no chip.
 While a turn runs the spinner replaces the `●` and the timer counts up; spend
 so far sits at the end.
 
@@ -348,23 +367,28 @@ and the gap widens with every tool call. What actually fills the window is the
 **last** call's input, and every `assistant` message carries the usage of the
 call that produced it. Crema keeps the last one.
 
-**The usage percentage is not in the headless stream at all.** The
-`rate_limit_event` names the window and says when it resets, but the
-`utilization` field older CLIs sent is gone, so crema was rendering a confident
-`5h 0%` on every turn. On 2.1.229 there is no local file with it either:
-`~/.claude/.usage_cache.json` is an older version's cache, and on this machine
-it had not been written since March — not even by an interactive session
-running at the time. Crema still reads it, honouring each window's own
-`resets_at` as an exact freshness test, but expect nothing from it.
+**The usage percentages ride the stream after all** — in a place that took
+three CLI versions to find. The `rate_limit_event`'s top-level `utilization`
+field is gone, and `~/.claude/.usage_cache.json` is an older version's cache
+that nothing writes any more (crema still reads it, honouring each window's
+`resets_at` as a freshness test, but expects nothing). What newer CLIs send
+instead is the event's **`unifiedWindows`** object: every window at once,
+percentage and reset time included, on every turn. Crema reads it, so the 5h
+and 7d gauges are live from the turn's own stream — and each turn's report is
+written into the same file the status-line bridge writes, merged window by
+window, so every agent and the next run start from the freshest numbers
+anyone has seen. A window whose reset time has passed is dropped everywhere
+rather than shown stale: one minute after a reset, "94% used" is a lie.
 
-So without help, that half of the row is a window name and a countdown, which
-is all anybody actually told crema. Two things improve on it:
+Two smaller sources still help:
 
-- Once a window is far enough along, the CLI starts sending
-  `surpassedThreshold` — a floor rather than a figure. Crema shows it as
-  `5h over 75%`, coloured like a gauge at that level. It arrives exactly when
-  the answer starts to mattering.
-- The **status-line bridge** below gets the real number.
+- Once a window is far enough along, the CLI also sends
+  `surpassedThreshold` — a floor rather than a figure — shown as
+  `5h over 75%` when no percentage is known.
+- The **status-line bridge** below keeps the numbers moving between turns,
+  from your interactive sessions' renders. An idle crema re-reads them on a
+  ten-second heartbeat, so the gauges and their reset countdowns move without
+  waiting for a keystroke.
 
 Codex reports neither figure, so both segments are simply absent for Codex
 agents rather than guessed at.
@@ -536,11 +560,47 @@ crema statusline [--then-file <path>]   # the usage bridge, above
 
 `--agent` and `--dir` set up the first agent; everything after that is `ctrl+n`.
 
+## What crema costs, and why
+
+Crema bills more than the same work done in the CLI's own terminal, and the
+reason is structural: **one turn is one process**. Headless mode takes a
+prompt, answers it, and exits, so every message you send starts a fresh
+`claude -p --resume` that rebuilds the conversation from the transcript. A
+live interactive session never puts its context down.
+
+Measured across 92 crema turns and 65 interactive ones on one machine: the
+first API call of a crema turn rewrote **59%** of its cached prefix (267k
+tokens written, 189k read); the interactive equivalent rewrote **11%** (72k
+written, 555k read). Cache writes bill at 1.25x–2x of input where reads bill
+at 0.1x, so that difference is most of the gap. It is *not* the cache
+lifetime: a subscriber's headless runs already get the same one-hour cache an
+interactive session gets — crema pins it explicitly with
+`ENABLE_PROMPT_CACHING_1H=1`, but measurement showed every cache write was
+already filed as `ephemeral_1h` before that flag existed.
+
+So crema stopped doing that. **Each agent now holds one CLI process open**
+and feeds turns to it over `--input-format stream-json` — the mode the SDK
+uses — so the context is put down once per agent instead of once per message.
+Measured live on a three-turn conversation: the second turn rewrote **81
+tokens** against 26,334 read, where the first had to establish all of it.
+
+The process is the agent's, and it is let go whenever holding it would be
+wrong: cancelling a turn (the CLI has no stdin word for "stop"), changing the
+model or permissions (both are command-line flags), `/clear`, `/resume`,
+closing the agent, and sitting idle for longer than the prompt cache it
+exists to keep warm. None of those lose the conversation — the CLI keeps the
+transcript, and the next message resumes it by id. A backend without the mode
+(Codex, the mock) is still driven a process per turn, where the exit is what
+ends a turn rather than the result line.
+
+`/compact` and `/clear` still help: they shrink the prefix every turn carries,
+and a 750k-token conversation pays for its size on every single one.
+
 ## How it works
 
 | | |
 |---|---|
-| Claude Code | `claude -p <prompt> --output-format stream-json --verbose --permission-mode bypassPermissions`, resumed with `--resume <session_id>` |
+| Claude Code | one process per agent: `claude -p --input-format stream-json --output-format stream-json --verbose --permission-mode bypassPermissions`, turns written to its stdin, resumed with `--resume <session_id>` when a new process is needed |
 | Codex | `codex exec --json --full-auto <prompt>`, resumed with `codex exec resume <thread_id>` |
 | Diff | `git diff --cached`, `git diff`, and `git ls-files --others --exclude-standard`, parsed in-process |
 
@@ -589,7 +649,7 @@ So crema does them itself:
 
 | | |
 |---|---|
-| `/clear` | drop the conversation and the backend session behind it — the next message starts a run with no `--resume`, so the agent has never heard of any of it |
+| `/clear` | drop the conversation and the backend session behind it — the next message starts a run with no `--resume`, so the agent has never heard of any of it. The spend meter starts over too; `/compact` keeps its total, since the work continues |
 | `/compact` | ask the agent to summarise the conversation, then clear it and put that summary in front of your next message. Two steps, one extra turn, and the new session opens knowing where the old one got to |
 | `/resume` | point the agent at any conversation this project has had — the CLI's own or crema's. `/resume` lists them newest first (when each last moved, how each began) in the option picker; `/resume <id>` attaches directly. Interactively this is the CLI's own session picker; headless the CLI doesn't offer it, so crema reads the same `~/.claude/projects` files the picker does |
 | `/model` | `/model opus` sets it; `/model` on its own opens the panel `↓` opens |
@@ -750,9 +810,12 @@ approval"* if the mode is too tight for what you asked.
 
 **Press `↓` in the input box** (or `ctrl+p`) and the two buttons above it take
 the highlight — the conversation stays where it is. `←→` moves between them,
-`enter` drops down that button's values, `enter` again picks one, and `esc`
-steps back out a layer at a time. Clicking a button does the same. Each agent
-has its own mode and model:
+`enter` opens that button's values — drawn where the status bar sits, at the
+bottom of the frame, so the picker can spread out without covering the
+conversation or the input. The status bar stands aside while a choice is being
+made and comes straight back after. `enter` again picks one, and `esc` steps
+back out a layer at a time. Clicking a button, or a value in the strip, does
+the same. Each agent has its own mode and model:
 
 | Mode | What the agent may do |
 |---|---|
@@ -778,6 +841,21 @@ runs. The status bar always shows the active mode, the diff pane shows
 exactly what changed, and every mode change is written into the conversation so
 the transcript explains why a later turn could or couldn't run something. Run
 crema in a git repo with a clean tree so you can always `git checkout` back.
+
+**The model list keeps up on its own.** What crema offers are the CLI's
+*aliases* — `opus`, `fable`, `sonnet`, `haiku` — because the CLI resolves an
+alias to its current generation: `opus` meant Opus 4 when this was written and
+means Opus 5 now, with no change here. `default` goes further and passes no
+`--model` flag at all, so it follows whatever the CLI decides fresh each run
+(org policy, then `ANTHROPIC_DEFAULT_MODEL`, then your account tier). What
+that misses is a genuinely new *name* — when Fable shipped, no alias pointed
+at it — so crema also merges in the options the CLI records in
+`~/.claude.json`, with the CLI's own label and description. The merge is
+additive: that cache holds only the extras beyond the base lineup, so it can
+add a new model but never take `opus` or `haiku` away, and a missing or
+unreadable file changes nothing. A model already covered by an alias isn't
+listed twice, and the CLI's description wins over crema's built-in note —
+it names the generation, which crema cannot know.
 
 The other button picks the model. Both lists read like the CLIs' own pickers —
 numbered, the one in force ticked, and each name followed by what it gets you,

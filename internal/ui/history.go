@@ -74,6 +74,13 @@ func (a *App) recallNext() bool {
 
 // arrowsAreForHistory keeps ↑↓ as cursor movement in a draft that has more
 // than one line — there, moving between the lines is the obvious meaning.
+// But a walk already under way keeps the arrows whatever the box holds:
+// recalling a multi-line message used to strand the walk on it, with the
+// down arrow suddenly meaning cursor movement instead of scrolling on.
+// Editing is still one keystroke away: typing anything ends the walk.
 func (a *App) arrowsAreForHistory() bool {
-	return a.focus == focusInput && !strings.Contains(a.in.Value(), "\n")
+	if a.focus != focusInput {
+		return false
+	}
+	return a.browsing() || !strings.Contains(a.in.Value(), "\n")
 }

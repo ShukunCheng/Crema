@@ -218,3 +218,51 @@ func TestHistorySurvivesARestart(t *testing.T) {
 		t.Fatalf("↑ after a restart = %q", got)
 	}
 }
+
+// Recalling a multi-line message must not strand the walk on it: the down
+// arrow keeps scrolling toward the present, the up arrow keeps going back.
+func TestAMultiLineEntryDoesNotStrandTheWalk(t *testing.T) {
+	a := testApp(t)
+	s := a.cur()
+	s.remember("first ask")
+	s.remember("a message\nof two lines")
+	s.remember("newest ask")
+
+	press(t, a, kmsg(tea.KeyUp)) // newest ask
+	press(t, a, kmsg(tea.KeyUp)) // the multi-line one
+	if got := a.in.Value(); got != "a message\nof two lines" {
+		t.Fatalf("draft = %q", got)
+	}
+	press(t, a, kmsg(tea.KeyUp)) // and past it
+	if got := a.in.Value(); got != "first ask" {
+		t.Fatalf("up should keep walking: %q", got)
+	}
+	press(t, a, kmsg(tea.KeyDown))
+	press(t, a, kmsg(tea.KeyDown))
+	if got := a.in.Value(); got != "newest ask" {
+		t.Fatalf("down should keep scrolling: %q", got)
+	}
+	press(t, a, kmsg(tea.KeyDown)) // back to the empty draft it interrupted
+	if a.in.Value() != "" || a.browsing() {
+		t.Fatalf("the walk should end on the draft: %q", a.in.Value())
+	}
+	press(t, a, kmsg(tea.KeyDown)) // and only now reach the buttons
+	if a.controls == nil {
+		t.Fatal("past the draft, down means the buttons")
+	}
+}
+
+// A multi-line draft you are writing keeps the arrows as cursor movement —
+// the walk only claims them once it has begun.
+func TestAMultiLineDraftKeepsCursorArrows(t *testing.T) {
+	a := testApp(t)
+	a.cur().remember("older ask")
+	a.in.SetValue("line one\nline two")
+	press(t, a, kmsg(tea.KeyUp))
+	if got := a.in.Value(); got != "line one\nline two" {
+		t.Fatalf("the draft must stay put: %q", got)
+	}
+	if a.browsing() {
+		t.Fatal("no walk starts inside a multi-line draft")
+	}
+}

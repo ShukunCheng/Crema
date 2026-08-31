@@ -380,13 +380,58 @@ func (t *Timeline) ToggleCollapse(i int) {
 	}
 	from, to := foldRun(t.blocks, i)
 	if from == to {
-		t.blocks[i].Collapsed = true
-	}
-	for j := from; j < to; j++ {
-		t.blocks[j].Collapsed = false
+		// Collapsing. Opening a summary opened its whole run, so closing any
+		// block of it closes the whole run back: fold everything around it
+		// that arrived folded. Folding one block and leaving its neighbours
+		// standing — the call folded, its output still open — was how a run
+		// failed to round-trip.
+		from, to = refoldRange(t.blocks, i)
+		for j := from; j < to; j++ {
+			t.blocks[j].Collapsed = true
+		}
+	} else {
+		for j := from; j < to; j++ {
+			t.blocks[j].Collapsed = false
+		}
 	}
 	t.renderAll()
 	t.vp.SetContent(t.highlighted())
+}
+
+// arrivesFolded reports whether a block starts life behind a summary line —
+// the rule AppendEvent applies, in one place, so refolding can reconstruct
+// exactly the run that was opened.
+func arrivesFolded(b Block) bool {
+	switch b.Kind {
+	case BlockThinking:
+		return true
+	case BlockTool:
+		return !changesFiles(b.Name)
+	case BlockToolOutput:
+		return !b.IsErr
+	case BlockAssistant:
+		return b.Sub // a subagent's prose is an aside; the answer never folds
+	}
+	return false
+}
+
+// refoldRange is the stretch that folds back together around i: every
+// neighbour that arrived folded with it, stopping — like foldRun — where the
+// work changes hands between the turn and a subagent. A block that arrived
+// open (a file edit, a failure) folds alone: it was never part of a run, and
+// hiding an edit behind "Ran 3 shell commands" is not what that click meant.
+func refoldRange(blocks []Block, i int) (from, to int) {
+	if !arrivesFolded(blocks[i]) {
+		return i, i + 1
+	}
+	from, to = i, i+1
+	for from > 0 && arrivesFolded(blocks[from-1]) && blocks[from-1].Sub == blocks[i].Sub {
+		from--
+	}
+	for to < len(blocks) && arrivesFolded(blocks[to]) && blocks[to].Sub == blocks[i].Sub {
+		to++
+	}
+	return from, to
 }
 
 // blockTitle is what a collapsible block calls itself, with no glyph of its

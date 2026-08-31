@@ -360,3 +360,26 @@ func TestTheBlockedListIsNotMadeUp(t *testing.T) {
 		}
 	}
 }
+
+// /clear starts the meter over with everything else; /compact carries it,
+// because the work continues there.
+func TestClearResetsTheSpendAndCompactKeepsIt(t *testing.T) {
+	a := testApp(t)
+	s := a.cur()
+	s.cost = 1.23
+	s.noteTask(&agent.TaskUpdate{ID: "t1", Status: "completed", Desc: "old work"})
+	send(t, a, "/clear")
+	if s.cost != 0 {
+		t.Fatalf("cost = %v, want the meter back at zero", s.cost)
+	}
+	if len(s.tasks) != 0 {
+		t.Fatal("the dropped conversation's tasks went with it")
+	}
+
+	s.cost = 2.34
+	s.tl.Append(Block{Kind: BlockAssistant, Text: "a summary"})
+	send(t, a, "/compact")
+	if s.cost != 2.34 {
+		t.Fatalf("cost = %v — compact continues the work and keeps its bill", s.cost)
+	}
+}

@@ -168,3 +168,38 @@ func TestAWarningThresholdIsKept(t *testing.T) {
 		t.Fatalf("rate limit: %+v", rl)
 	}
 }
+
+// Recording merges over what is there: the bridge and the turns each know
+// about windows the other's last report skipped, and a seven_day-only write
+// must not erase a five_hour value that is still current.
+func TestRecordUsageMergesWindows(t *testing.T) {
+	dir := t.TempDir()
+	prevPath, prevNow := usagePathOverride, timeNow
+	usagePathOverride = filepath.Join(dir, "usage.json")
+	now := time.Now()
+	timeNow = func() time.Time { return now }
+	t.Cleanup(func() { usagePathOverride, timeNow = prevPath, prevNow })
+
+	five := RateLimit{Type: "five_hour", Utilization: 0.53, Known: true, ResetsAt: now.Add(2 * time.Hour)}
+	if err := RecordUsage([]RateLimit{five}); err != nil {
+		t.Fatal(err)
+	}
+	week := RateLimit{Type: "seven_day", Utilization: 0.44, Known: true, ResetsAt: now.Add(90 * time.Hour)}
+	if err := RecordUsage([]RateLimit{week}); err != nil {
+		t.Fatal(err)
+	}
+	got := recordedUsage()
+	if len(got) != 2 || got[0].Type != "five_hour" || got[0].Utilization != 0.53 || got[1].Type != "seven_day" {
+		t.Fatalf("recorded = %+v", got)
+	}
+
+	// A newer report of the same window replaces it; an expired one is gone.
+	timeNow = func() time.Time { return now.Add(3 * time.Hour) } // five_hour has reset
+	if err := RecordUsage([]RateLimit{{Type: "seven_day", Utilization: 0.45, Known: true, ResetsAt: week.ResetsAt}}); err != nil {
+		t.Fatal(err)
+	}
+	got = recordedUsage()
+	if len(got) != 1 || got[0].Type != "seven_day" || got[0].Utilization != 0.45 {
+		t.Fatalf("after the reset: %+v", got)
+	}
+}

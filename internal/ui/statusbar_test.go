@@ -208,7 +208,7 @@ func TestLimitsMergeTheCacheAndTheStream(t *testing.T) {
 		t.Fatalf("a new session should already know the allowance: %+v", s.limits)
 	}
 
-	s.refreshLimits(&agent.RateLimit{Type: "five_hour", ResetsAt: reset})
+	s.refreshLimits([]agent.RateLimit{{Type: "five_hour", ResetsAt: reset}})
 	if len(s.limits) != 2 {
 		t.Fatalf("the stream's window should be added: %+v", s.limits)
 	}
@@ -228,7 +228,7 @@ func TestTheCacheWinsAWindowTheStreamAlsoNames(t *testing.T) {
 	s := NewSession(1, usageStub{agent.NewMock(), []agent.RateLimit{
 		{Type: "five_hour", Utilization: 0.12, Known: true, ResetsAt: reset},
 	}}, t.TempDir())
-	s.refreshLimits(&agent.RateLimit{Type: "five_hour", ResetsAt: reset})
+	s.refreshLimits([]agent.RateLimit{{Type: "five_hour", ResetsAt: reset}})
 	if len(s.limits) != 1 || !s.limits[0].Known {
 		t.Fatalf("want one window, with its number: %+v", s.limits)
 	}
@@ -310,5 +310,47 @@ func TestEveryKnownWindowGetsABar(t *testing.T) {
 	}
 	if n := strings.Count(row, "48;2;"+rgb(T.Track)); n != 3 {
 		t.Fatalf("want three unfilled tracks, got %d", n)
+	}
+}
+
+// A window that has reset is not still 94% used. The turn's remembered
+// report used to outlive its own reset time and keep a stale warning on the
+// gauges — measured live, one minute after a reset.
+func TestAStaleTurnLimitDropsAtItsReset(t *testing.T) {
+	a := testApp(t)
+	s := a.cur()
+	s.refreshLimits([]agent.RateLimit{{
+		Type: "five_hour", Utilization: 0.94, Known: true,
+		ResetsAt: time.Now().Add(-time.Minute), Surpassed: 0.9,
+	}})
+	for _, l := range s.limits {
+		if l.Type == "five_hour" {
+			t.Fatalf("the window reset a minute ago; showing %+v is a lie", l)
+		}
+	}
+	// Still running windows stay.
+	s.refreshLimits([]agent.RateLimit{{
+		Type: "five_hour", Utilization: 0.05, Known: true,
+		ResetsAt: time.Now().Add(4 * time.Hour),
+	}})
+	if len(s.limits) == 0 || s.limits[0].Utilization != 0.05 {
+		t.Fatalf("limits = %+v", s.limits)
+	}
+}
+
+// An idle crema still watches the numbers: the heartbeat re-arms itself and
+// wakes the frame, and each wake-up is willing to re-read the usage file.
+func TestTheHeartbeatKeepsIdleGaugesFresh(t *testing.T) {
+	a := testApp(t)
+	_, cmd := a.Update(heartbeatMsg{})
+	if cmd == nil {
+		t.Fatal("the heartbeat must re-arm or the app goes back to sleep")
+	}
+	s := a.cur()
+	s.limitsAt = time.Now().Add(-usageRefresh - time.Second)
+	was := s.limitsAt
+	_ = a.View()
+	if !s.limitsAt.After(was) {
+		t.Fatal("a frame after the refresh interval should re-read the allowance")
 	}
 }

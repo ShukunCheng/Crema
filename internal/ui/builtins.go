@@ -185,6 +185,11 @@ func hasCommand(cmds []agent.Command, name string) bool {
 
 func runClear(a *App, s *Session, _ string) tea.Cmd {
 	s.reset()
+	// Starting over starts the meter over: the dollars belonged to the
+	// conversation just dropped. /compact keeps its total, because the work
+	// continues there; only the transcript is folded.
+	s.cost = 0
+	s.tasks = nil
 	a.note = "cleared — the next message starts a new session"
 	a.persist()
 	return nil

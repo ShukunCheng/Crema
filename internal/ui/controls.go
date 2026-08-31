@@ -204,49 +204,69 @@ func (c *Controls) pick(i int) *controlOption {
 	return &chip.options[i]
 }
 
-// Height is how many rows the whole thing takes: the button row, plus the list
-// when one is open.
-func (c *Controls) Height() int {
-	if !c.open {
-		return 1
-	}
-	return len(c.chips[c.idx].options) + 3 + 1 // box border, rows, hint, buttons
+// Height is how many rows float above the input: just the button row. The
+// open list does not float — it takes the status bar's place at the bottom of
+// the frame, where a picker can spread out without covering the conversation.
+func (c *Controls) Height() int { return 1 }
+
+// ListHeight is how tall that bottom strip is while a list is open: a title,
+// the values, and the key hint.
+func (c *Controls) ListHeight() int {
+	return len(c.chips[c.idx].options) + 2
 }
 
-// ClickRow maps a row of the overlay to what was clicked. The button row is
-// the last one; x picks which button.
+// ClickRow maps a click on the overlay — the button row — to a button. x
+// picks which; clicking the open one shuts its list.
 func (c *Controls) ClickRow(row, x int) (chosen *controlOption, hit bool) {
-	if row == c.Height()-1 {
-		for i, chip := range c.chips {
-			if x >= chip.col && x < chip.col+chip.width {
-				if c.idx == i && c.open {
-					c.open = false // clicking the open one shuts it
-					return nil, true
-				}
-				c.idx = i
-				c.openList()
-				return nil, true
-			}
-		}
+	if row != 0 {
 		return nil, false
 	}
-	if c.open && row >= 1 && row <= len(c.chips[c.idx].options) {
-		c.opt = row - 1
-		return c.pick(c.opt), true
+	for i, chip := range c.chips {
+		if x >= chip.col && x < chip.col+chip.width {
+			if c.idx == i && c.open {
+				c.open = false
+				return nil, true
+			}
+			c.idx = i
+			c.openList()
+			return nil, true
+		}
 	}
 	return nil, false
 }
 
-// View draws the list, if open, above the button row.
-func (c *Controls) View(w int) string {
-	buttons := c.buttonRow(w)
-	if !c.open {
-		return buttons
+// ClickListRow maps a click inside the bottom strip to a value. Row 0 is the
+// title and the last row is the hint; neither picks anything.
+func (c *Controls) ClickListRow(row, _ int) (chosen *controlOption, hit bool) {
+	if !c.open || row < 1 || row > len(c.chips[c.idx].options) {
+		return nil, false
 	}
+	c.opt = row - 1
+	return c.pick(c.opt), true
+}
+
+// View draws the button row that floats above the input. The open list is
+// drawn by ListView, in the status bar's place.
+func (c *Controls) View(w int) string { return c.buttonRow(w) }
+
+// ListView draws the open button's values where the status bar was: a title,
+// the numbered rows with the one in force ticked, and the keys. The status
+// bar stands aside while a choice is being made — choosing is the one thing
+// happening, and the picker gets the room the CLIs' own pickers get.
+func (c *Controls) ListView(w int) string {
 	chip := c.chips[c.idx]
 	rows := chip.rows()
-	hint := chip.label + " · ↑↓ move · 1-" + itoa(len(rows)) + " pick · enter apply · esc back"
-	return renderDropUp(rows, c.opt, hint, w) + "\n" + buttons
+	out := []string{fg(T.Magenta).Bold(true).Width(max(1, w)).Render(" " + strings.ToUpper(chip.label))}
+	for i, r := range rows {
+		st := base().Foreground(T.Fg).Width(max(1, w))
+		if i == c.opt {
+			st = lipgloss.NewStyle().Background(T.Purple).Foreground(T.Surface).Bold(true).Width(max(1, w))
+		}
+		out = append(out, st.Render(" "+r))
+	}
+	hint := "↑↓ move · 1-" + itoa(len(rows)) + " pick · enter apply · esc back"
+	out = append(out, fg(T.Muted).Width(max(1, w)).Render(" "+hint))
+	return strings.Join(out, "\n")
 }
 
 // rows lays the values out the way the CLIs' own pickers do: numbered, the one

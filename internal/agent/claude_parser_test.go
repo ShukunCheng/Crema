@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 )
 
 func parseFixture(t *testing.T, p interface {
@@ -243,5 +244,30 @@ func TestASecondResultReportsOnlyTheGrowth(t *testing.T) {
 	}
 	if got := two[0].Result.CostUSD; got < 0.00499 || got > 0.00501 {
 		t.Fatalf("second should be the delta: %v", got)
+	}
+}
+
+// The rate_limit_event's unifiedWindows carries every window with its
+// percentage — the line here is a real capture. Both windows must come out
+// Known, and the event's own status sticks to the window it names.
+func TestUnifiedWindowsCarryBothPercentages(t *testing.T) {
+	p := &ClaudeParser{}
+	ev := `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1787768400,"rateLimitType":"five_hour","overageStatus":"rejected","unifiedWindows":{"five_hour":{"utilization":0.53,"resetsAt":1787768400},"seven_day":{"utilization":0.31,"resetsAt":1788253200}}}}`
+	if evs := p.ParseLine([]byte(ev)); len(evs) != 0 {
+		t.Fatalf("the event itself is silent: %+v", evs)
+	}
+	res := p.ParseLine([]byte(`{"type":"result","subtype":"success","total_cost_usd":0.01}`))
+	rl := res[0].Result.RateLimits
+	if len(rl) != 2 {
+		t.Fatalf("RateLimits = %+v", rl)
+	}
+	if rl[0].Type != "five_hour" || !rl[0].Known || rl[0].Utilization != 0.53 || rl[0].Status != "allowed" {
+		t.Fatalf("five_hour = %+v", rl[0])
+	}
+	if rl[1].Type != "seven_day" || !rl[1].Known || rl[1].Utilization != 0.31 {
+		t.Fatalf("seven_day = %+v", rl[1])
+	}
+	if got := time.Unix(1787768400, 0); !rl[0].ResetsAt.Equal(got) {
+		t.Fatalf("ResetsAt = %v", rl[0].ResetsAt)
 	}
 }

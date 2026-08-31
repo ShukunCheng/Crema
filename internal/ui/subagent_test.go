@@ -146,3 +146,46 @@ func TestATurnOnlyEndsWhenTheStreamCloses(t *testing.T) {
 	}
 	s.close()
 }
+
+// The sidebar is the only place every agent is visible at once, so it says
+// when one has subagents working — an agent whose subagent is grinding away
+// used to look exactly like one thinking by itself.
+func TestTheSidebarShowsSubagentsWorking(t *testing.T) {
+	a := threeAgents(t)
+	s := a.sessions[1]
+	s.busy = true
+	s.noteTask(&agent.TaskUpdate{ID: "t1", Status: "running", Desc: "audit", Type: "general-purpose"})
+	s.noteTask(&agent.TaskUpdate{ID: "t2", Status: "running", Desc: "tests", Type: "general-purpose"})
+
+	row := strings.Split(stripSGR(RenderSidebar(a.sessions, a.active, noDrag, "*", SidebarWidth-2, 10)), "\n")[SidebarRowOf(1)]
+	if !strings.Contains(row, "+2") {
+		t.Fatalf("the row should count the subagents: %q", row)
+	}
+
+	s.noteTask(&agent.TaskUpdate{ID: "t1", Status: "completed"})
+	row = strings.Split(stripSGR(RenderSidebar(a.sessions, a.active, noDrag, "*", SidebarWidth-2, 10)), "\n")[SidebarRowOf(1)]
+	if !strings.Contains(row, "+1") || strings.Contains(row, "+2") {
+		t.Fatalf("one finished, one to go: %q", row)
+	}
+}
+
+// A background task belongs to the run that launched it: when the CLI exits
+// without saying how one ended, it stops counting as running rather than
+// haunting the sidebar forever.
+func TestTasksDoNotOutliveTheirRun(t *testing.T) {
+	a := testApp(t)
+	s := a.cur()
+	s.busy = true
+	s.noteTask(&agent.TaskUpdate{ID: "t1", Status: "running", Desc: "long one"})
+	if s.RunningTasks() != 1 {
+		t.Fatal("it should count while the run is alive")
+	}
+	s.noteResult(&agent.TurnResult{})
+	s.endTurn()
+	if s.RunningTasks() != 0 {
+		t.Fatalf("nothing is left to run it: %+v", s.tasks)
+	}
+	if len(s.tasks) != 1 || !strings.Contains(s.tasks[0].Status, "ended") {
+		t.Fatalf("and /tasks should still say what became of it: %+v", s.tasks)
+	}
+}

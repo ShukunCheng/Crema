@@ -81,3 +81,17 @@ func TestClaudeUnavailableWhenBinaryMissing(t *testing.T) {
 		t.Fatal("want availability error")
 	}
 }
+
+// Crema's claude runs carry the one-hour prompt-cache switch. Losing it costs
+// real money: a headless run defaults to the five-minute lifetime, and an
+// agent revisited a quarter-hour later re-writes most of its conversation.
+func TestClaudeRunsAskForTheHourLongCache(t *testing.T) {
+	c := NewClaude()
+	var found bool
+	for _, e := range c.extraEnv {
+		found = found || e == "ENABLE_PROMPT_CACHING_1H=1"
+	}
+	if !found {
+		t.Fatalf("extraEnv = %v, want the 1h cache switch", c.extraEnv)
+	}
+}

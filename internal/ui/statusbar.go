@@ -60,6 +60,9 @@ type StatusData struct {
 	// allowances).
 	ContextTokens, ContextWindow int64
 	Limits                       []agent.RateLimit
+	// PR is the branch's pull request, when gh knows of one — a chip on the
+	// mode row, coloured by its state, clickable to open it.
+	PR *PRInfo
 }
 
 // seg is one run of styled text in the bar. Everything is drawn on the bar's
@@ -333,6 +336,9 @@ func modeRow(s StatusData, w int) string {
 	}
 
 	var right []seg
+	if start, _ := PRRange(w, s.Diff, s.PR); start > 0 {
+		right = append(right, boldTxt(prColor(s.PR), chip(prLabel(s.PR), prChipWidth(s.PR))))
+	}
 	if start, _ := ShowDiffRange(w, s.Diff); start > 0 {
 		right = append(right, boldTxt(T.Lilac, chip("diff", showDiffWidth)))
 	}
@@ -359,6 +365,53 @@ func ShowDiffRange(w int, v DiffView) (start, end int) {
 		return 0, 0
 	}
 	return theme - showDiffWidth, theme
+}
+
+// prLabel is the chip's text; the state only spells itself out once it is no
+// longer the ordinary one.
+func prLabel(pr *PRInfo) string {
+	l := "PR #" + itoa(pr.Number)
+	switch {
+	case pr.State == "MERGED":
+		l += " merged"
+	case pr.State == "CLOSED":
+		l += " closed"
+	case pr.Draft:
+		l += " draft"
+	}
+	return l
+}
+
+func prChipWidth(pr *PRInfo) int { return lipgloss.Width(prLabel(pr)) + 2 }
+
+func prColor(pr *PRInfo) lipgloss.Color {
+	switch {
+	case pr.State == "MERGED":
+		return T.Purple
+	case pr.State == "CLOSED":
+		return T.Red
+	case pr.Draft:
+		return T.Muted
+	}
+	return T.Green
+}
+
+// PRRange is the half-open column range of the PR chip: to the left of
+// whatever chips already hold the corner, or 0,0 when there is no PR or no
+// room.
+func PRRange(w int, v DiffView, pr *PRInfo) (start, end int) {
+	if pr == nil {
+		return 0, 0
+	}
+	left, _ := ThemeToggleRange(w)
+	if ds, _ := ShowDiffRange(w, v); ds > 0 {
+		left = ds
+	}
+	pw := prChipWidth(pr)
+	if left == 0 || left-pw < 2 {
+		return 0, 0
+	}
+	return left - pw, left
 }
 
 // chip renders a fixed-width button label, centered.

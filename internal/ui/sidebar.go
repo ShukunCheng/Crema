@@ -95,6 +95,14 @@ func RenderSidebar(sessions []*Session, active, dragging int, spin string, w, h 
 			state = fmt.Sprintf("%s %.0fs", spin, s.Elapsed().Seconds())
 			st = run
 		}
+		// Work handed to a subagent is still this agent's work, and the
+		// sidebar is the only place every agent is visible at once: without
+		// this, an agent whose subagent is grinding away looks the same as
+		// one thinking by itself.
+		if n := s.RunningTasks(); n > 0 {
+			state += fmt.Sprintf(" +%d", n)
+			st = run
+		}
 		// index prefix doubles as the alt+N jump hint
 		head := fmt.Sprintf("%s%d %s", marker, i+1, s.Title())
 		// The × is drawn separately so it can keep its own colour, which

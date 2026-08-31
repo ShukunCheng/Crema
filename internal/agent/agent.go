@@ -120,6 +120,11 @@ type TurnResult struct {
 	RateLimit     *RateLimit
 	Canceled      bool
 	Err           string // non-empty ⇒ the turn failed
+	// RateLimits is every usage window the turn's last rate_limit_event
+	// reported. Newer CLIs put both windows, percentages included, in the
+	// event's unifiedWindows; RateLimit above keeps the legacy single window
+	// so older saved conversations still decode.
+	RateLimits []RateLimit
 }
 
 // PermissionMode is how much the agent may do without asking. Headless CLIs

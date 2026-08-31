@@ -55,10 +55,28 @@ type Session struct {
 	// limits are the account's allowance windows. The stream names the window
 	// and its reset; the percentage, when there is one, comes from the
 	// backend's own usage cache.
-	limits    []agent.RateLimit
-	turnLimit *agent.RateLimit // the newest rate_limit_event, kept across refreshes
-	limitsAt  time.Time        // when the allowance was last read off disk
-	lastOpts  agent.RunOptions
+	limits     []agent.RateLimit
+	turnLimits []agent.RateLimit // the last turn's own report, a fallback between file writes
+	// pr is the branch's pull request, from gh, cached per branch. prAt is
+	// when it was last asked; nil pr with a fresh prAt means "asked, none".
+	// conv is the agent's CLI process, held open across turns when the
+	// backend can do that. Nil means the next turn opens one — or, for a
+	// backend without the mode, that every turn is its own process.
+	conv     agent.Conversation
+	convStop context.CancelFunc
+	// convAt is when the conversation last carried a turn: a process held
+	// open past the prompt cache's own lifetime is holding nothing worth
+	// having, so it is let go.
+	convAt   time.Time
+	canceled bool
+
+	pr         *PRInfo
+	prBranch   string
+	prAt       time.Time
+	prChecking bool
+	turnLimit  *agent.RateLimit // the newest rate_limit_event, kept across refreshes
+	limitsAt   time.Time        // when the allowance was last read off disk
+	lastOpts   agent.RunOptions
 
 	diff        gitdiff.DiffSet
 	diffSeq     int
@@ -143,6 +161,7 @@ func (s *Session) Queued() []string {
 // agent has never heard of any of this. Spend is not reset, because it was
 // spent; the permission mode and model are the user's settings, not history.
 func (s *Session) reset() {
+	s.closeConv()
 	s.agentSID = ""
 	s.ctxTokens, s.ctxWindow = 0, 0
 	s.preamble = ""
@@ -154,8 +173,9 @@ func (s *Session) reset() {
 // usageRefresh is how often the allowance is re-read while crema is just
 // sitting there. The status-line bridge rewrites it every time an interactive
 // session redraws, which is often; once a turn would be too rare to watch a
-// bar move, and every frame would be silly.
-const usageRefresh = 30 * time.Second
+// bar move, and every frame would be silly. It matches the idle heartbeat,
+// so each wake-up reads fresh numbers rather than deciding they can wait.
+const usageRefresh = heartbeatEvery
 
 // maybeRefreshLimits re-reads the allowance if it has been a while. Called
 // from the frame, so the bars follow the file without waiting for a turn.
@@ -251,6 +271,7 @@ func (s *Session) SetPermission(p agent.PermissionMode) {
 		return
 	}
 	s.Permission = p
+	s.closeConv() // the mode is a command-line flag: the next turn needs a new process
 	s.tl.Append(Block{Kind: BlockSystem, Text: s.modeNote()})
 }
 
@@ -260,6 +281,7 @@ func (s *Session) SetModel(m string) {
 		return
 	}
 	s.Model = m
+	s.closeConv() // likewise the model
 	name := m
 	if m == agent.DefaultModel {
 		name = "the CLI's default"
@@ -326,16 +348,20 @@ func (s *Session) startTurn(shown, prompt string) tea.Cmd {
 		// A compacted session opens with the summary of the one before it.
 		prompt, s.preamble = s.preamble+"\n\n---\n\n"+prompt, ""
 	}
-	s.streamSeq++
-	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
 	s.busy = true
 	s.turnStart = time.Now()
 	s.activity, s.turnOut, s.turnEvents = "working", 0, 0
+	s.canceled = false
 	s.lastOpts = agent.RunOptions{
 		Prompt: prompt, Dir: s.Dir, SessionID: s.agentSID,
 		Permission: s.Permission, Model: s.Model,
 	}
+	if _, ok := s.Backend.(agent.Streamer); ok {
+		return s.sendToConv(prompt)
+	}
+	s.streamSeq++
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
 	return startStream(s.Backend, ctx, s.lastOpts, s.ID, s.streamSeq)
 }
 
@@ -357,7 +383,17 @@ func (s *Session) noteResult(r *agent.TurnResult) {
 	if r.ContextWindow > 0 {
 		s.ctxTokens, s.ctxWindow = r.ContextTokens, r.ContextWindow
 	}
-	s.refreshLimits(r.RateLimit)
+	if len(r.RateLimits) > 0 {
+		// The turn's own report is as fresh as usage data gets; write it
+		// where the status-line bridge writes, so every agent and the next
+		// run see it too.
+		_ = agent.RecordUsage(r.RateLimits)
+		s.refreshLimits(r.RateLimits)
+	} else if r.RateLimit != nil {
+		s.refreshLimits([]agent.RateLimit{*r.RateLimit})
+	} else {
+		s.refreshLimits(nil)
+	}
 }
 
 // endTurn runs when the stream closes.
@@ -379,10 +415,21 @@ func (s *Session) endTurn() {
 			float64(r.DurationMS)/1000)})
 	}
 	s.busy = false
-	s.stream = nil
+	if s.conv == nil {
+		s.stream = nil // a held-open conversation keeps listening between turns
+	}
 	if s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
+	}
+	// A background task belongs to the run that launched it. If the CLI
+	// exited without ever saying how one ended, it is not still going —
+	// nothing is left to run it — so it stops being counted as running
+	// rather than haunting the sidebar with work that finished unseen.
+	for i := range s.tasks {
+		if s.tasks[i].Status == "running" {
+			s.tasks[i].Status = "ended with the turn"
+		}
 	}
 }
 
@@ -443,31 +490,123 @@ func (s *Session) RunningTasks() int {
 // backend's usage cache is preferred — it is the only source with a
 // percentage — and the newest rate_limit_event fills in for a window the cache
 // doesn't cover, contributing its reset time and no false precision.
-func (s *Session) refreshLimits(fromTurn *agent.RateLimit) {
+func (s *Session) refreshLimits(fromTurn []agent.RateLimit) {
 	s.limitsAt = time.Now()
-	if fromTurn != nil {
-		s.turnLimit = fromTurn
+	if len(fromTurn) > 0 {
+		s.turnLimits = fromTurn
 	}
 	var limits []agent.RateLimit
 	if u, ok := s.Backend.(agent.UsageReporter); ok {
-		limits = u.Usage()
+		limits = u.Usage() // the recorded file already drops the expired
 	}
-	if s.turnLimit != nil {
+	now := time.Now()
+	for _, l := range s.turnLimits {
+		if !l.ResetsAt.IsZero() && !l.ResetsAt.After(now) {
+			continue // that window has reset; whatever it said no longer holds
+		}
 		covered := false
-		for _, l := range limits {
-			covered = covered || l.Label() == s.turnLimit.Label()
+		for _, have := range limits {
+			covered = covered || have.Label() == l.Label()
 		}
 		if !covered {
-			limits = append(limits, *s.turnLimit)
+			limits = append(limits, l)
 		}
 	}
 	s.limits = limits
 }
 
-// cancelTurn stops an in-flight turn; the adapter still delivers a final
-// canceled TurnEnd, which is what flips busy back off.
+// persistent reports whether this agent holds its CLI process open between
+// turns. It is what decides when a turn is over: a process-per-turn backend
+// ends its turn by exiting, a held-open one by saying so.
+func (s *Session) persistent() bool {
+	_, ok := s.Backend.(agent.Streamer)
+	return ok
+}
+
+// sendToConv hands the prompt to the agent's open process, opening one first
+// if there isn't a live one. The listener it returns runs for the whole
+// conversation rather than the turn, so anything the CLI says between turns
+// — a background task finishing, say — still arrives.
+func (s *Session) sendToConv(prompt string) tea.Cmd {
+	fresh := false
+	if s.conv == nil {
+		st, ok := s.Backend.(agent.Streamer)
+		if !ok {
+			return nil
+		}
+		ctx, stop := context.WithCancel(context.Background())
+		conv, err := st.Open(ctx, s.lastOpts)
+		if err != nil {
+			stop()
+			s.tl.Append(Block{Kind: BlockError, Text: err.Error()})
+			s.busy = false
+			return nil
+		}
+		s.conv, s.convStop, fresh = conv, stop, true
+		s.streamSeq++
+		s.stream = conv.Events()
+	}
+	if err := s.conv.Send(prompt); err != nil {
+		// The process died between turns; the next message opens a new one.
+		s.closeConv()
+		s.tl.Append(Block{Kind: BlockError, Text: "the agent's process ended — send again to start a new one: " + err.Error()})
+		s.busy = false
+		return nil
+	}
+	s.convAt = time.Now()
+	if !fresh {
+		return nil // the listener from the first turn is still running
+	}
+	return waitForEvent(s.stream, s.ID, s.streamSeq)
+}
+
+// closeConv ends the agent's process. The conversation itself is not lost —
+// the CLI keeps the transcript, and the next turn resumes it by id — so this
+// is what every setting that lives on the command line does: model,
+// permissions, and starting over.
+func (s *Session) closeConv() {
+	if s.conv != nil {
+		go s.conv.Close() // draining its channel can block; never on the UI
+		s.conv = nil
+	}
+	if s.convStop != nil {
+		s.convStop()
+		s.convStop = nil
+	}
+	s.stream = nil
+}
+
+// maybeCloseIdleConv lets go of a process that has been sitting longer than
+// the prompt cache it exists to keep warm. Past that the process is only
+// holding memory.
+func (s *Session) maybeCloseIdleConv() {
+	if s.conv == nil || s.busy || s.convAt.IsZero() {
+		return
+	}
+	if time.Since(s.convAt) > convIdleLife {
+		s.closeConv()
+	}
+}
+
+// convIdleLife matches the one-hour prompt cache: a held process whose cache
+// has expired is worth no more than a new one.
+const convIdleLife = time.Hour
+
+// cancelTurn stops an in-flight turn. A process-per-turn backend is killed by
+// its context; a held-open conversation is closed, since the CLI has no way
+// to be told "stop that" over stdin — and the next message opens a new
+// process on the same conversation.
 func (s *Session) cancelTurn() bool {
-	if !s.busy || s.cancel == nil {
+	if !s.busy {
+		return false
+	}
+	if s.conv != nil {
+		s.canceled = true
+		s.closeConv()
+		s.tl.Append(Block{Kind: BlockSystem, Text: "canceling the current turn…"})
+		return true
+	}
+	if s.cancel == nil {
 		return false
 	}
 	s.cancel()
@@ -477,6 +616,7 @@ func (s *Session) cancelTurn() bool {
 
 // close cancels any running turn and drains the stream so its goroutine ends.
 func (s *Session) close() {
+	s.closeConv()
 	if s.cancel != nil {
 		s.cancel()
 		s.cancel = nil

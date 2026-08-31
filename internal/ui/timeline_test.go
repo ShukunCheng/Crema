@@ -315,3 +315,72 @@ func TestABuiltinsAnswerIsOnScreen(t *testing.T) {
 		t.Fatalf("/help printed off screen:\n%s", stripSGR(s.tl.View()))
 	}
 }
+
+// Opening a run and closing it again round-trips: closing any block of it
+// refolds the whole run, not just the block whose header was clicked —
+// which used to leave the call's output and the thinking standing open.
+func TestAnOpenedRunRefoldsWhole(t *testing.T) {
+	tl := NewTimeline(80, 20)
+	tl.AppendEvent(agent.Event{Kind: agent.KindText, Thinking: true, Text: "hm"})
+	tl.AppendEvent(agent.Event{Kind: agent.KindToolCall, Tool: &agent.ToolCall{Name: "Bash", Input: "ls"}})
+	tl.AppendEvent(agent.Event{Kind: agent.KindToolOutput, Output: &agent.ToolOutput{Content: "a.txt"}})
+	tl.AppendEvent(agent.Event{Kind: agent.KindToolCall, Tool: &agent.ToolCall{Name: "Bash", Input: "pwd"}})
+	tl.AppendEvent(agent.Event{Kind: agent.KindToolOutput, Output: &agent.ToolOutput{Content: "/x"}})
+
+	tl.ToggleCollapse(0) // open the whole run from its summary
+	if v := stripSGR(tl.Content()); !strings.Contains(v, "a.txt") {
+		t.Fatalf("the run should be open:\n%s", v)
+	}
+	tl.ToggleCollapse(1) // close it again from the first call's header
+	v := stripSGR(tl.Content())
+	for _, gone := range []string{"a.txt", "/x", "hm", "▾"} {
+		if strings.Contains(v, gone) {
+			t.Fatalf("%q should be behind the summary again:\n%s", gone, v)
+		}
+	}
+	if !strings.Contains(v, "Ran 2 shell commands") {
+		t.Fatalf("one summary line for the whole run:\n%s", v)
+	}
+}
+
+// A block that arrived open folds alone: a file edit was never part of the
+// run beside it, and folding it must not drag the run's blocks in.
+func TestAHandFoldedEditFoldsAlone(t *testing.T) {
+	tl := NewTimeline(80, 20)
+	tl.AppendEvent(agent.Event{Kind: agent.KindToolCall, Tool: &agent.ToolCall{Name: "Bash", Input: "ls"}})
+	tl.AppendEvent(agent.Event{Kind: agent.KindToolOutput, Output: &agent.ToolOutput{Content: "a.txt"}})
+	tl.AppendEvent(agent.Event{Kind: agent.KindToolCall, Tool: &agent.ToolCall{Name: "Edit", Input: "the change"}})
+
+	tl.ToggleCollapse(2) // fold the edit by hand
+	if !tl.Blocks()[2].Collapsed {
+		t.Fatal("the edit should be folded")
+	}
+	if got := stripSGR(tl.Content()); !strings.Contains(got, "Ran 1 shell command") {
+		t.Fatalf("the neighbouring run keeps its own summary:\n%s", got)
+	}
+}
+
+// A subagent's opened run refolds under its own name, and never drags the
+// main turn's neighbours in with it.
+func TestASubagentRunRefoldsUnderItsName(t *testing.T) {
+	tl := NewTimeline(90, 20)
+	tl.AppendEvent(agent.Event{Kind: agent.KindToolCall, Tool: &agent.ToolCall{Name: "Bash", Input: "main"}})
+	tl.AppendEvent(agent.Event{Kind: agent.KindToolCall, SubID: "p", Tool: &agent.ToolCall{Name: "Bash", Input: "sub"}})
+	tl.AppendEvent(agent.Event{Kind: agent.KindText, SubID: "p", Text: "sub report"})
+
+	tl.ToggleCollapse(1) // open the subagent's run
+	if v := stripSGR(tl.Content()); !strings.Contains(v, "sub report") {
+		t.Fatalf("open:\n%s", v)
+	}
+	tl.ToggleCollapse(2) // close it from its prose
+	v := stripSGR(tl.Content())
+	if strings.Contains(v, "sub report") {
+		t.Fatalf("the subagent's run should be folded again:\n%s", v)
+	}
+	if !strings.Contains(v, "subagent · Ran 1 shell command") {
+		t.Fatalf("under its own name:\n%s", v)
+	}
+	if !tl.Blocks()[1].Collapsed || !tl.Blocks()[0].Collapsed {
+		t.Fatal("both stay folded — each under its own summary")
+	}
+}
