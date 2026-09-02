@@ -24,8 +24,11 @@ type Session struct {
 	// saved between runs. Name is what you called this agent, empty until you
 	// call it something.
 	Permission agent.PermissionMode
-	Model      string
-	Name       string
+	// AutoCompact folds the conversation up before it grows expensive. On by
+	// default, which is what the CLI's own interactive sessions do.
+	AutoCompact bool
+	Model       string
+	Name        string
 
 	tl *Timeline
 	dp *DiffPanel
@@ -236,13 +239,14 @@ func defaultMode(backend agent.Agent) agent.PermissionMode {
 
 func NewSession(id int, backend agent.Agent, dir string) *Session {
 	s := &Session{
-		ID:         id,
-		Backend:    backend,
-		Dir:        dir,
-		Permission: defaultMode(backend),
-		Model:      agent.DefaultModel,
-		tl:         NewTimeline(80, 20),
-		dp:         NewDiffPanel(40, 20),
+		ID:          id,
+		Backend:     backend,
+		Dir:         dir,
+		Permission:  defaultMode(backend),
+		Model:       agent.DefaultModel,
+		AutoCompact: true,
+		tl:          NewTimeline(80, 20),
+		dp:          NewDiffPanel(40, 20),
 	}
 	// The allowance is a fact about the account, not about a turn: worth
 	// showing before the first message rather than only after it.
@@ -473,6 +477,24 @@ func (s *Session) noteTask(u *agent.TaskUpdate) {
 		return
 	}
 	s.tasks = append(s.tasks, *u)
+}
+
+// Background is what is running behind the turn, split the way the CLI's own
+// status line splits it: shells it backgrounded, and subagents it handed work
+// to. They read differently — a shell is a command you could go and watch, a
+// subagent is an agent of its own — so they are counted apart.
+func (s *Session) Background() (shells, agents int) {
+	for _, t := range s.tasks {
+		if t.Status != "running" {
+			continue
+		}
+		if t.Type == "local_bash" {
+			shells++
+		} else {
+			agents++
+		}
+	}
+	return shells, agents
 }
 
 // RunningTasks is how much background work is still going.

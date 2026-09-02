@@ -187,6 +187,25 @@ func (t *Timeline) GotoEnd() {
 	t.vp.GotoBottom()
 }
 
+// ShowAnswer scrolls to the last block the way an answer wants to be read.
+// Going to the end is right for a short one, but /help and /tasks can be
+// taller than the pane, and the end of a long answer is its least useful
+// part — you would have to scroll up to find out it even started. So a block
+// too tall to fit is shown from its first line instead.
+func (t *Timeline) ShowAnswer() {
+	if len(t.rendered) == 0 {
+		t.GotoEnd()
+		return
+	}
+	last := strings.Count(t.rendered[len(t.rendered)-1], "\n")
+	if last < t.vp.Height {
+		t.GotoEnd()
+		return
+	}
+	t.follow = false
+	t.vp.SetYOffset(t.blockLines() - last)
+}
+
 // Blocks exposes the conversation for saving.
 func (t *Timeline) Blocks() []Block { return t.blocks }
 

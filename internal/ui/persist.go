@@ -33,8 +33,11 @@ type SavedSession struct {
 	ContextTokens int64                `json:"context_tokens,omitempty"`
 	ContextWindow int64                `json:"context_window,omitempty"`
 	Permission    agent.PermissionMode `json:"permission,omitempty"`
-	Model         string               `json:"model,omitempty"`
-	Name          string               `json:"name,omitempty"`
+	// NoAutoCompact is stored the wrong way round on purpose: the default is
+	// on, and an agent saved before this existed should come back on.
+	NoAutoCompact bool   `json:"no_autocompact,omitempty"`
+	Model         string `json:"model,omitempty"`
+	Name          string `json:"name,omitempty"`
 	// History is what you typed at this agent, for ↑ in the input box. Saved
 	// apart from the conversation because it outlives it: /clear drops what
 	// the agent knows, not what you asked.
@@ -128,6 +131,7 @@ func (a *App) StateSnapshot() State {
 			ContextTokens: s.ctxTokens,
 			ContextWindow: s.ctxWindow,
 			Permission:    s.Permission,
+			NoAutoCompact: !s.AutoCompact,
 			Model:         s.Model,
 			Name:          s.Name,
 			History:       s.history,
@@ -188,6 +192,7 @@ func (a *App) RestoreSessions(st State) (int, []string) {
 		s.cost = ss.Cost
 		s.Model = ss.Model
 		s.Name = ss.Name
+		s.AutoCompact = !ss.NoAutoCompact
 		s.history = ss.History
 		s.cliCmds = ss.CLICommands
 		if ss.AgentSID != "" {

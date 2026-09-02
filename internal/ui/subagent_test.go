@@ -189,3 +189,79 @@ func TestTasksDoNotOutliveTheirRun(t *testing.T) {
 		t.Fatalf("and /tasks should still say what became of it: %+v", s.tasks)
 	}
 }
+
+// The hub counts what is running behind the turn, the way the CLI's own
+// status line does, and says which key opens it.
+func TestTheHubCountsBackgroundWork(t *testing.T) {
+	a := testApp(t)
+	a.resize(140, 26)
+	s := a.cur()
+	s.noteTask(&agent.TaskUpdate{ID: "b1", Status: "running", Type: "local_bash", Desc: "npx vitest run"})
+	s.noteTask(&agent.TaskUpdate{ID: "b2", Status: "running", Type: "local_bash", Desc: "dotnet build"})
+	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "running", Type: "general-purpose", Desc: "audit"})
+	if sh, ag := s.Background(); sh != 2 || ag != 1 {
+		t.Fatalf("Background() = %d shells, %d agents", sh, ag)
+	}
+	view := stripSGR(a.View())
+	if !strings.Contains(view, "2 shells · 1 agent") {
+		t.Fatalf("the hub should count them:\n%s", stripSGR(a.statusLine()))
+	}
+	if !strings.Contains(view, "(↓ to see)") {
+		t.Fatal("and teach the gesture that opens them")
+	}
+
+	// Finished work stops being counted.
+	s.noteTask(&agent.TaskUpdate{ID: "b1", Status: "completed"})
+	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "completed"})
+	if !strings.Contains(stripSGR(a.View()), "1 shell") {
+		t.Fatalf("one left:\n%s", stripSGR(a.statusLine()))
+	}
+}
+
+// ↓ opens the button row, which grows a background button while there is
+// background work; picking a row shows what that task has been doing.
+func TestTheBackgroundButtonShowsATask(t *testing.T) {
+	a := testApp(t)
+	a.resize(140, 26)
+	s := a.cur()
+	s.noteTask(&agent.TaskUpdate{ID: "b1", Status: "running", Type: "local_bash",
+		Desc: "npx vitest run", LastTool: "Bash", Tokens: 15062})
+
+	c := openControls(t, a)
+	if len(c.chips) != 3 || c.chips[2].kind != controlBackground {
+		t.Fatalf("the row should carry a background button: %+v", c.chips)
+	}
+	if c.chips[2].value != "1 shell" {
+		t.Fatalf("button reads %q", c.chips[2].value)
+	}
+	rows := c.chips[2].rows()
+	if len(rows) != 1 || !strings.Contains(rows[0], "shell") || !strings.Contains(rows[0], "npx vitest run") {
+		t.Fatalf("rows = %q", rows)
+	}
+	if !strings.Contains(rows[0], "now: Bash") || !strings.Contains(rows[0], "15k tokens") {
+		t.Fatalf("a row should say what it is doing: %q", rows[0])
+	}
+
+	a.Update(kmsg(tea.KeyRight)) // model -> permissions
+	a.Update(kmsg(tea.KeyRight)) // -> background
+	a.Update(kmsg(tea.KeyEnter)) // open its list
+	a.Update(kmsg(tea.KeyEnter)) // take the first row
+	if got := lastBlock(s); !strings.Contains(got, "npx vitest run") {
+		t.Fatalf("picking one should show what it has been up to:\n%s", got)
+	}
+	if s.busy {
+		t.Fatal("looking at background work costs no turn")
+	}
+}
+
+// With nothing running, the button is not in the way.
+func TestNoBackgroundNoButton(t *testing.T) {
+	a := testApp(t)
+	c := openControls(t, a)
+	if len(c.chips) != 2 {
+		t.Fatalf("chips = %d, want just model and permissions", len(c.chips))
+	}
+	if strings.Contains(stripSGR(a.statusLine()), "to see") {
+		t.Fatal("and the hub says nothing about background work")
+	}
+}

@@ -39,6 +39,7 @@ func init() {
 	builtins = []builtin{
 		{name: "clear", desc: "start over — the agent forgets this conversation", needsIdle: true, run: runClear},
 		{name: "compact", desc: "summarise this conversation and carry it into a fresh one", needsIdle: true, run: runCompact},
+		{name: "autocompact", desc: "fold this agent up on its own before it grows expensive — /autocompact on|off", run: runAutoCompact},
 		{name: "resume", desc: "point this agent at another of the project's conversations — /resume for the list", needsIdle: true, run: runResume},
 		{name: "model", desc: "the model for this agent — /model opus, or /model for the list", run: runModel},
 		{name: "permissions", desc: "what this agent is allowed to do", run: runPermissions},
@@ -64,7 +65,7 @@ func init() {
 // than blocked — being wrong about a command that works is worse than paying
 // for one that doesn't.
 var interactiveOnly = []string{
-	"agents", "autocompact", "color", "config", "context", "debug", "doctor",
+	"agents", "color", "config", "context", "debug", "doctor",
 	"effort", "extra-usage", "fast", "heapdump", "import", "mcp", "reload-skills",
 	"usage", "usage-credits",
 }
@@ -150,7 +151,7 @@ func (a *App) runBuiltin(s *Session, text string) (tea.Cmd, bool) {
 			return nil, true
 		}
 		cmd := b.run(a, s, arg)
-		s.tl.GotoEnd() // whatever it had to say is the answer to what you typed
+		s.tl.ShowAnswer() // whatever it had to say is the answer to what you typed
 		return cmd, true
 	}
 	for _, n := range interactiveOnly {
@@ -159,7 +160,7 @@ func (a *App) runBuiltin(s *Session, text string) (tea.Cmd, bool) {
 				" belongs to the CLI's own interface. Crema drives the CLI headlessly, where " +
 				"that command doesn't exist — sending it would just be a prompt the model reads, " +
 				"so crema didn't. Type /help for what crema does have."})
-			s.tl.GotoEnd()
+			s.tl.ShowAnswer()
 			return nil, true
 		}
 	}
@@ -168,7 +169,7 @@ func (a *App) runBuiltin(s *Session, text string) (tea.Cmd, bool) {
 	if len(s.cliCmds) > 0 && !knownToBackend(s, name) {
 		s.tl.Append(Block{Kind: BlockSystem, Text: "/" + name + " is not a command " +
 			s.Backend.Label() + " has. Type / to see what it does."})
-		s.tl.GotoEnd()
+		s.tl.ShowAnswer()
 		return nil, true
 	}
 	return nil, false

@@ -57,7 +57,7 @@ the interface without spending anything.
 | `alt+1` … `alt+9` | jump straight to that agent |
 | `ctrl+b` | show/hide the agent sidebar |
 | `↑` (from the input) | walk back through what you have asked this agent; `↓` scrolls forward again — a multi-line entry doesn't interrupt the walk, and typing anything ends it |
-| `↓` (at the end of the history) | highlight the model / permissions buttons above the input; `enter` opens one |
+| `↓` (at the end of the history) | step into the status bar's settings: model, then permissions, then background work if any. `↑` walks back and off the front returns to the input; `enter` opens the highlighted one |
 | `ctrl+p` | the same buttons, from anywhere |
 | drag in the conversation or the diff | select text; copies to the clipboard on release, and `ctrl+c` copies it again |
 | `ctrl+t` | cycle the diff: hidden → beside the conversation → full screen (or click the buttons on its header) |
@@ -116,7 +116,7 @@ The whole interface is clickable:
 | the `[ PR #123 ]` chip in the status bar | open the branch's pull request in the browser |
 | a row in the picker or in a completion list | choose it |
 | a message waiting in the queue | take it back into the input box |
-| the `model` / `permissions` buttons above the input | open that button's values |
+| the model, permission mode or background count in the status bar | open that value's list |
 | any pane | focus it (so `pgup`/`pgdn` go there) |
 | a URL in the conversation | open it in the browser — links render underlined; a drag across one still selects |
 | a tool block's header line | fold or unfold that block |
@@ -164,6 +164,15 @@ not to you, and the main conversation carries what came of it — but its file
 edits and failures arrive open, because a turn is judged by what it changed,
 whoever in it did the changing. A subagent's run never merges with the main
 turn's: the summary line says whose work it stands for.
+
+The status bar counts it too — `2 shells · 1 agent (↓ to see)` on the mode
+row, the way the CLI'''s own status line does, with shells counted apart from
+subagents because they are different things to go and look at. `↓` (or
+`ctrl+p`) puts a **background** button on the row beside model and
+permissions, and opening it lists what is running: what each was asked, what
+tool it is on now, and its spend so far. Picking one prints that task'''s own
+output into the conversation. It only ever shows — the CLI has no way to be
+told to stop one, so crema does not offer a key that would lie.
 
 While background work runs, the working line counts it — `… · 2 background
 tasks · esc to cancel` — and the sidebar carries the same count as `+2` on
@@ -593,8 +602,16 @@ transcript, and the next message resumes it by id. A backend without the mode
 (Codex, the mock) is still driven a process per turn, where the exit is what
 ends a turn rather than the result line.
 
-`/compact` and `/clear` still help: they shrink the prefix every turn carries,
-and a 750k-token conversation pays for its size on every single one.
+**Conversations fold themselves up.** With the caching fixed, what is left is
+size, and size is paid on every turn: measured across this machine's agents,
+the median conversation was 714k tokens by the time a turn started and the
+largest 988k of a 1M window. Every turn re-reads all of that, and every
+process opened cold rewrites it. The CLI'''s interactive sessions compact
+themselves before that happens; a headless run never does, because nobody is
+there to be asked. So crema does it, at 80% of the window, by the same means
+as `/compact`: summarise, start again with the summary in front of the next
+message. It says so in the transcript when it happens, and `/autocompact off`
+turns it off for that agent.
 
 ## How it works
 
@@ -650,6 +667,7 @@ So crema does them itself:
 | | |
 |---|---|
 | `/clear` | drop the conversation and the backend session behind it — the next message starts a run with no `--resume`, so the agent has never heard of any of it. The spend meter starts over too; `/compact` keeps its total, since the work continues |
+| `/autocompact` | fold this agent up on its own before it grows expensive — on by default at 80% of the window, `/autocompact off` to stop it |
 | `/compact` | ask the agent to summarise the conversation, then clear it and put that summary in front of your next message. Two steps, one extra turn, and the new session opens knowing where the old one got to |
 | `/resume` | point the agent at any conversation this project has had — the CLI's own or crema's. `/resume` lists them newest first (when each last moved, how each began) in the option picker; `/resume <id>` attaches directly. Interactively this is the CLI's own session picker; headless the CLI doesn't offer it, so crema reads the same `~/.claude/projects` files the picker does |
 | `/model` | `/model opus` sets it; `/model` on its own opens the panel `↓` opens |
@@ -810,12 +828,17 @@ approval"* if the mode is too tight for what you asked.
 
 **Press `↓` in the input box** (or `ctrl+p`) and the two buttons above it take
 the highlight — the conversation stays where it is. `←→` moves between them,
-`enter` opens that button's values — drawn where the status bar sits, at the
-bottom of the frame, so the picker can spread out without covering the
-conversation or the input. The status bar stands aside while a choice is being
-made and comes straight back after. `enter` again picks one, and `esc` steps
-back out a layer at a time. Clicking a button, or a value in the strip, does
-the same. Each agent has its own mode and model:
+Nothing floats over the input to say so: **the values are highlighted where
+the hub already writes them** — the model up in the identity line, the
+permission mode and the background work down on the mode row. `↓` steps in from the
+input box and along — model, then permissions, then the background work when
+there is any — and `↑` walks back, off the front and into the input box where
+it started. At the far end `↓` does nothing rather than wrapping to a place
+you did not ask for. `enter` opens the one highlighted, and its values are drawn in
+the status bar'''s own place at the bottom of the frame, so the picker has room
+without covering the conversation. `esc` steps back out a layer at a time, and
+clicking a value in the hub does what selecting it does. Each agent has its
+own mode and model:
 
 | Mode | What the agent may do |
 |---|---|

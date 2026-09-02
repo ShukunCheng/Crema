@@ -441,6 +441,16 @@ func (a *App) applyControl(chosen *controlOption, closed bool) tea.Cmd {
 		return nil
 	}
 	switch chosen.kind {
+	case controlBackground:
+		// Show what it has been up to, in the conversation, where there is
+		// room for it and where it stays.
+		for _, t := range s.tasks {
+			if t.ID == chosen.task {
+				s.tl.Append(Block{Kind: BlockSystem, Text: taskDetail(t)})
+				s.tl.ShowAnswer()
+				break
+			}
+		}
 	case controlModel:
 		s.SetModel(chosen.model) // "" is a real choice here: the CLI's own default
 	case controlPermission:
@@ -1052,8 +1062,6 @@ func (a *App) bottomRows() int {
 // sent.
 func (a *App) dropUpHeight() int {
 	switch {
-	case a.controls != nil:
-		return a.controls.Height()
 	case a.comp != nil:
 		return a.comp.Height()
 	case a.choices != nil:
@@ -1385,6 +1393,25 @@ func (a *App) handleClick(msg tea.MouseMsg) tea.Cmd {
 		}
 	}
 	// The status bar is the last row; its right edge holds the chips.
+	// The values ↓ walks between are drawn in the status bar, so that is
+	// where they are clicked. Asked for before the chips, which sit further
+	// right on the same row and cannot overlap them.
+	if row := msg.Y - (a.h - StatusRows(a.h)); row >= 0 {
+		for kind, spot := range StatusPicks(a.statusData(), a.w, StatusRows(a.h)) {
+			if spot.row != row || msg.X < spot.start || msg.X >= spot.end {
+				continue
+			}
+			if a.controls == nil {
+				if cmd := a.openControls(); cmd != nil {
+					_ = cmd
+				}
+			}
+			if a.controls != nil && a.controls.SelectKind(kind) {
+				a.resize(a.w, a.h)
+				return nil
+			}
+		}
+	}
 	if msg.Y == a.h-1 {
 		if start, end := ThemeToggleRange(a.w); start > 0 && msg.X >= start && msg.X < end {
 			ToggleMode()
@@ -1412,13 +1439,6 @@ func (a *App) handleClick(msg tea.MouseMsg) tea.Cmd {
 	if a.overCompletions(msg.Y) {
 		row := msg.Y - (a.lay.PaneH - a.dropUpHeight())
 		switch {
-		case a.controls != nil:
-			chosen, hit := a.controls.ClickRow(row, msg.X)
-			if hit {
-				cmd := a.applyControl(chosen, false)
-				a.resize(a.w, a.h) // a click can open or close the bottom strip
-				return cmd
-			}
 		case a.comp != nil:
 			if a.comp.Click(row) {
 				return a.acceptCompletion()
@@ -1603,8 +1623,6 @@ func (a *App) View() string {
 	}
 	main := lipgloss.JoinHorizontal(lipgloss.Top, panes...)
 	switch {
-	case a.controls != nil:
-		main = overlayBottom(main, a.controls.View(a.w))
 	case a.comp != nil:
 		main = overlayBottom(main, a.comp.View(a.w))
 	case a.choices != nil:
@@ -1638,10 +1656,15 @@ func fitFrame(frame string, h int) string {
 }
 
 func (a *App) statusLine() string {
+	return RenderStatus(a.statusData(), a.w, StatusRows(a.h))
+}
+
+// statusData is everything the bar draws, gathered in one place so the click
+// handler can ask where a value landed without drawing anything.
+func (a *App) statusData() StatusData {
 	s := a.cur()
 	if s == nil {
-		return RenderStatus(StatusData{Agent: "no agents", Mode: "—", Note: a.note},
-			a.w, StatusRows(a.h))
+		return StatusData{Agent: "no agents", Mode: "—", Note: a.note}
 	}
 	d := StatusData{
 		Agent: s.Backend.Label(), Mode: s.Permission.Label(), Dir: s.Dir, Diff: a.diffView,
@@ -1650,6 +1673,10 @@ func (a *App) statusLine() string {
 		Branch: s.diff.Branch, Untracked: s.diff.Untracked, PR: s.pr,
 		Model:         s.Model,
 		ContextTokens: s.ctxTokens, ContextWindow: s.ctxWindow, Limits: s.limits,
+	}
+	d.Shells, d.Agents = s.Background()
+	if a.controls != nil {
+		d.Picking, d.Pick = true, a.controls.Kind()
 	}
 	if n := len(a.sessions); n > 1 {
 		running := 0
@@ -1666,7 +1693,7 @@ func (a *App) statusLine() string {
 	if s.busy {
 		d.ElapsedSec = s.Elapsed().Seconds()
 	}
-	return RenderStatus(d, a.w, StatusRows(a.h))
+	return d
 }
 
 // finishTurn is everything that happens when a turn is over, wherever the
@@ -1687,6 +1714,12 @@ func (a *App) finishTurn(s *Session) []tea.Cmd {
 	}
 	a.persist()
 	cmds := []tea.Cmd{s.collectDiff()}
+	// Grown too big to keep paying for? Fold it up before anything else
+	// happens — a queued message is cheaper to send into the folded
+	// conversation, and it is still sent, after the summarising turn.
+	if cmd := a.maybeAutoCompact(s); cmd != nil {
+		return append(cmds, cmd)
+	}
 	// Whatever was typed while this turn ran goes now. Only then is there any
 	// point offering the agent's own question — a queued message is already
 	// the answer to it.

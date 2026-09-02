@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"strings"
 	"testing"
 
@@ -142,17 +144,21 @@ func TestTypingDismissesTheRow(t *testing.T) {
 	}
 }
 
-// The buttons are buttons: clicking one opens it, clicking a value applies it.
-func TestClickingAButtonAndThenAValue(t *testing.T) {
+// The values in the hub are the buttons: clicking one opens its list, and
+// clicking a row of that list applies it.
+func TestClickingAValueInTheHubOpensIt(t *testing.T) {
 	a := testApp(t)
+	a.resize(120, 26)
 	s := a.cur()
-	c := openControls(t, a)
 
-	row := a.lay.PaneH - a.dropUpHeight() // the button row, when nothing is open
-	perm := c.chips[1]
-	a.Update(click(perm.col+1, row))
-	if !c.Open() || c.idx != 1 {
-		t.Fatalf("clicking the permissions button should open it: idx=%d open=%v", c.idx, c.Open())
+	spot, ok := StatusPicks(a.statusData(), a.w, StatusRows(a.h))[controlPermission]
+	if !ok {
+		t.Fatal("the permission mode should be somewhere in the hub")
+	}
+	a.Update(click(spot.start+1, a.h-StatusRows(a.h)+spot.row))
+	c := a.controls
+	if c == nil || !c.Open() || c.Kind() != controlPermission {
+		t.Fatalf("clicking the mode should open its values: %+v", c)
 	}
 
 	// The open list holds the bottom strip, where the status bar was.
@@ -160,6 +166,27 @@ func TestClickingAButtonAndThenAValue(t *testing.T) {
 	a.Update(click(4, top+1)) // the first value, just under the title
 	if s.Permission != c.chips[1].options[0].perm {
 		t.Fatalf("Permission = %q, want %q", s.Permission, c.chips[1].options[0].perm)
+	}
+}
+
+// Nothing floats over the input any more: what ↓ selects is highlighted
+// where it is already written, in the hub.
+func TestNothingFloatsOverTheInput(t *testing.T) {
+	a := testApp(t)
+	a.resize(120, 26)
+	before := a.lay.PaneH
+	openControls(t, a)
+	if a.dropUpHeight() != 0 {
+		t.Fatalf("the settings row should take no rows, got %d", a.dropUpHeight())
+	}
+	if a.lay.PaneH != before {
+		t.Fatalf("and the conversation should not have shrunk: %d -> %d", before, a.lay.PaneH)
+	}
+	if !a.statusData().Picking {
+		t.Fatal("the hub should say it is being walked")
+	}
+	if !strings.Contains(stripSGR(a.View()), "↑↓ move · enter open") {
+		t.Fatal("and say which keys move")
 	}
 }
 
@@ -340,5 +367,158 @@ func TestClickingTheBottomStripPicksAValue(t *testing.T) {
 	}
 	if !strings.Contains(stripSGR(a.View()), "Context") {
 		t.Fatal("and the status bar comes back")
+	}
+}
+
+// The highlight is the selection: ↓ then ←→ moves it between the values the
+// hub already shows, rather than drawing a second copy of them over the
+// conversation.
+func TestTheHighlightWalksTheHub(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor) // TestMain strips colour; the highlight is colour
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	a := testApp(t)
+	a.resize(120, 26)
+	s := a.cur()
+	s.SetModel("demo-fast")
+	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "running", Type: "general-purpose", Desc: "audit"})
+
+	// highlighted reports whether the value with this text is drawn inverted.
+	highlighted := func(text string) bool {
+		for _, ln := range strings.Split(a.View(), "\n") {
+			for _, part := range strings.Split(ln, "\x1b[") {
+				if strings.Contains(part, text) && strings.Contains(part, "48;2;179;124;240") {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	if openControls(t, a); !highlighted("demo-fast") {
+		t.Fatal("↓ should highlight the model where it is already written")
+	}
+	a.Update(kmsg(tea.KeyRight))
+	if !highlighted("full access") || highlighted("demo-fast") {
+		t.Fatal("→ should move the highlight to the permission mode")
+	}
+	a.Update(kmsg(tea.KeyRight))
+	if !highlighted("1 agent") || highlighted("full access") {
+		t.Fatal("→ again should reach the background work")
+	}
+	a.Update(kmsg(tea.KeyEsc))
+	if highlighted("1 agent") {
+		t.Fatal("esc puts the hub back to plain")
+	}
+}
+
+// All four arrows move the highlight; only enter opens what it is on. ↓ used
+// to open the highlighted value, which made walking past one impossible
+// without opening it on the way.
+func TestArrowsMoveAndOnlyEnterOpens(t *testing.T) {
+	a := testApp(t)
+	a.resize(120, 26)
+	s := a.cur()
+	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "running", Type: "general-purpose", Desc: "audit"})
+	c := openControls(t, a)
+	if c.Kind() != controlModel || c.Open() {
+		t.Fatalf("↓ from the input lands on the model, unopened: kind=%v open=%v", c.Kind(), c.Open())
+	}
+
+	a.Update(kmsg(tea.KeyDown))
+	if c.Open() || c.Kind() != controlPermission {
+		t.Fatalf("↓ should walk on, not open: kind=%v open=%v", c.Kind(), c.Open())
+	}
+	a.Update(kmsg(tea.KeyDown))
+	if c.Open() || c.Kind() != controlBackground {
+		t.Fatalf("↓ again reaches the background work: kind=%v open=%v", c.Kind(), c.Open())
+	}
+	a.Update(kmsg(tea.KeyUp))
+	if c.Open() || c.Kind() != controlPermission {
+		t.Fatalf("↑ walks back: kind=%v open=%v", c.Kind(), c.Open())
+	}
+	a.Update(kmsg(tea.KeyRight))
+	if c.Kind() != controlBackground {
+		t.Fatal("→ moves the same way as ↓")
+	}
+	a.Update(kmsg(tea.KeyLeft))
+	if c.Kind() != controlPermission {
+		t.Fatal("← moves the same way as ↑")
+	}
+
+	a.Update(kmsg(tea.KeyEnter))
+	if !c.Open() {
+		t.Fatal("enter is the only thing that opens one")
+	}
+	// Inside the list the arrows belong to the values again.
+	a.Update(kmsg(tea.KeyDown))
+	a.Update(kmsg(tea.KeyEnter))
+	if s.Permission == agent.PermissionFull {
+		t.Fatal("and enter in the list applies the value it is on")
+	}
+	// esc is the way back out of the row.
+	openControls(t, a)
+	a.Update(kmsg(tea.KeyEsc))
+	if a.controls != nil {
+		t.Fatal("esc leaves the settings")
+	}
+}
+
+// The settings are a walk out from the input box and back, not a carousel:
+// ↓ steps in and along, ↓ at the far end does nothing, and ↑ off the front
+// returns to the input where the walk began.
+func TestTheSettingsWalkOutAndBack(t *testing.T) {
+	a := testApp(t)
+	a.resize(120, 26)
+	s := a.cur()
+	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "running", Type: "general-purpose", Desc: "audit"})
+
+	press(t, a, kmsg(tea.KeyDown)) // from the input: model
+	c := a.controls
+	if c == nil || c.Kind() != controlModel {
+		t.Fatalf("↓ from the input should land on the model: %+v", c)
+	}
+	press(t, a, kmsg(tea.KeyDown))
+	if c.Kind() != controlPermission {
+		t.Fatalf("then permissions: %v", c.Kind())
+	}
+	press(t, a, kmsg(tea.KeyDown))
+	if c.Kind() != controlBackground {
+		t.Fatalf("then the background work: %v", c.Kind())
+	}
+	press(t, a, kmsg(tea.KeyDown))
+	if a.controls == nil || c.Kind() != controlBackground {
+		t.Fatal("↓ at the far end does nothing — it must not wrap or drop out")
+	}
+
+	press(t, a, kmsg(tea.KeyUp))
+	if c.Kind() != controlPermission {
+		t.Fatalf("↑ walks back: %v", c.Kind())
+	}
+	press(t, a, kmsg(tea.KeyUp))
+	if c.Kind() != controlModel {
+		t.Fatalf("and back: %v", c.Kind())
+	}
+	press(t, a, kmsg(tea.KeyUp))
+	if a.controls != nil {
+		t.Fatal("↑ off the front returns to the input box")
+	}
+	if a.focus != focusInput {
+		t.Fatal("with the focus back where the walk started")
+	}
+}
+
+// With nothing running there is no third stop: ↓ off permissions stays put.
+func TestTheWalkEndsWhereTheValuesDo(t *testing.T) {
+	a := testApp(t)
+	a.resize(120, 26)
+	press(t, a, kmsg(tea.KeyDown))
+	press(t, a, kmsg(tea.KeyDown))
+	c := a.controls
+	if c == nil || c.Kind() != controlPermission {
+		t.Fatalf("two steps in: %+v", c)
+	}
+	press(t, a, kmsg(tea.KeyDown))
+	if a.controls == nil || c.Kind() != controlPermission {
+		t.Fatal("no background work, so there is nowhere further to go")
 	}
 }

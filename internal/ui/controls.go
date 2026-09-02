@@ -18,6 +18,11 @@ type controlKind int
 const (
 	controlModel controlKind = iota
 	controlPermission
+	// controlBackground is the work running behind the turn: the shells the
+	// agent backgrounded and the subagents it handed work to. It is only on
+	// the row while there is any, since a button for nothing is a button in
+	// the way.
+	controlBackground
 )
 
 // controlOption is one value a chip can take.
@@ -26,6 +31,7 @@ type controlOption struct {
 	label, desc string
 	perm        agent.PermissionMode
 	model       string
+	task        string // controlBackground: the CLI's own task id
 	on          bool
 }
 
@@ -78,8 +84,47 @@ func NewControls(s *Session) *Controls {
 	}
 
 	c.chips = []controlChip{model, perm}
+	if bg, ok := backgroundChip(s); ok {
+		c.chips = append(c.chips, bg)
+	}
 	c.layout()
 	return c
+}
+
+// backgroundChip is the button for what is running behind the turn. Picking
+// a row shows that task's own output, which is the only thing crema can
+// honestly offer: the CLI has no way to be told to stop one of them, so this
+// does not pretend to.
+func backgroundChip(s *Session) (controlChip, bool) {
+	shells, agents := s.Background()
+	if shells+agents == 0 {
+		return controlChip{}, false
+	}
+	chip := controlChip{
+		kind:  controlBackground,
+		label: "background",
+		value: backgroundLabel(shells, agents),
+	}
+	for _, t := range s.tasks {
+		if t.Status != "running" {
+			continue
+		}
+		kind := t.Type
+		if kind == "local_bash" {
+			kind = "shell"
+		}
+		desc := t.Desc
+		if t.LastTool != "" {
+			desc += " · now: " + t.LastTool
+		}
+		if t.Tokens > 0 {
+			desc += " · " + shortCount(t.Tokens) + " tokens"
+		}
+		chip.options = append(chip.options, controlOption{
+			kind: controlBackground, label: kind, desc: desc, task: t.ID,
+		})
+	}
+	return chip, true
 }
 
 // layout works out where each button sits. Computed here rather than while
@@ -118,14 +163,26 @@ func (c *Controls) Update(msg tea.KeyMsg) (chosen *controlOption, closed bool) {
 	switch msg.String() {
 	case "esc":
 		return nil, true
-	case "left", "shift+tab":
-		c.move(-1)
-	case "right", "tab":
-		c.move(1)
-	case "enter", "down", " ":
+	case "up", "left", "shift+tab":
+		// A walk, not a carousel: ↓ came from the input box, so ↑ off the
+		// first value goes back to it. Wrapping around to the far end would
+		// be a surprising place to land.
+		if c.idx == 0 {
+			return nil, true
+		}
+		c.idx--
+	case "down", "right", "tab":
+		if c.idx < len(c.chips)-1 {
+			c.idx++
+		}
+		// At the last value ↓ does nothing. There is nothing past it — the
+		// background button is not even on the row unless something is
+		// running — and dropping back into the input box would send the next
+		// keystroke somewhere the eye is not.
+	case "enter", " ":
+		// Only enter opens one, so walking past a value costs one key and
+		// nothing opens by accident on the way through.
 		c.openList()
-	case "up":
-		return nil, true // back up out of the row, the way you came in
 	}
 	return nil, false
 }
@@ -173,10 +230,10 @@ func digit(msg tea.KeyMsg) int {
 	return 0
 }
 
+// move steps the highlight within the row, clamped at both ends. Only the
+// open list wraps; the row itself is a walk out from the input box and back.
 func (c *Controls) move(delta int) {
-	if n := len(c.chips); n > 0 {
-		c.idx = ((c.idx+delta)%n + n) % n
-	}
+	c.idx = max(0, min(c.idx+delta, len(c.chips)-1))
 }
 
 // openList shows the highlighted button's values, starting on the current one.
@@ -204,10 +261,12 @@ func (c *Controls) pick(i int) *controlOption {
 	return &chip.options[i]
 }
 
-// Height is how many rows float above the input: just the button row. The
-// open list does not float — it takes the status bar's place at the bottom of
-// the frame, where a picker can spread out without covering the conversation.
-func (c *Controls) Height() int { return 1 }
+// Height is how many rows float above the input: none. What ↓ selects is
+// highlighted in the status bar, where the model and the mode are already
+// written — a strip of buttons over the conversation would only say the same
+// words a second time. The open list still takes the status bar's place,
+// where a picker has room to spread out.
+func (c *Controls) Height() int { return 0 }
 
 // ListHeight is how tall that bottom strip is while a list is open: a title,
 // the values, and the key hint.
@@ -215,24 +274,31 @@ func (c *Controls) ListHeight() int {
 	return len(c.chips[c.idx].options) + 2
 }
 
-// ClickRow maps a click on the overlay — the button row — to a button. x
-// picks which; clicking the open one shuts its list.
-func (c *Controls) ClickRow(row, x int) (chosen *controlOption, hit bool) {
-	if row != 0 {
-		return nil, false
+// Kind is what the highlighted button changes, so the status bar can show
+// which of its own values is selected.
+func (c *Controls) Kind() controlKind {
+	if c.idx < 0 || c.idx >= len(c.chips) {
+		return controlModel
 	}
+	return c.chips[c.idx].kind
+}
+
+// SelectKind points the row at one particular button and opens it — what a
+// click on that value in the status bar means.
+func (c *Controls) SelectKind(kind controlKind) bool {
 	for i, chip := range c.chips {
-		if x >= chip.col && x < chip.col+chip.width {
-			if c.idx == i && c.open {
-				c.open = false
-				return nil, true
-			}
-			c.idx = i
-			c.openList()
-			return nil, true
+		if chip.kind != kind {
+			continue
 		}
+		if c.idx == i && c.open {
+			c.open = false // clicking the open one shuts it
+			return true
+		}
+		c.idx = i
+		c.openList()
+		return true
 	}
-	return nil, false
+	return false
 }
 
 // ClickListRow maps a click inside the bottom strip to a value. Row 0 is the
@@ -245,9 +311,9 @@ func (c *Controls) ClickListRow(row, _ int) (chosen *controlOption, hit bool) {
 	return c.pick(c.opt), true
 }
 
-// View draws the button row that floats above the input. The open list is
-// drawn by ListView, in the status bar's place.
-func (c *Controls) View(w int) string { return c.buttonRow(w) }
+// View is what floats above the input: nothing. The selection lives in the
+// status bar and the open list replaces it.
+func (c *Controls) View(int) string { return "" }
 
 // ListView draws the open button's values where the status bar was: a title,
 // the numbered rows with the one in force ticked, and the keys. The status
@@ -264,7 +330,11 @@ func (c *Controls) ListView(w int) string {
 		}
 		out = append(out, st.Render(" "+r))
 	}
-	hint := "↑↓ move · 1-" + itoa(len(rows)) + " pick · enter apply · esc back"
+	verb := "enter apply"
+	if chip.kind == controlBackground {
+		verb = "enter view" // looking at background work does not change it
+	}
+	hint := "↑↓ move · 1-" + itoa(len(rows)) + " pick · " + verb + " · esc back"
 	out = append(out, fg(T.Muted).Width(max(1, w)).Render(" "+hint))
 	return strings.Join(out, "\n")
 }

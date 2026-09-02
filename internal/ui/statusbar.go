@@ -63,6 +63,45 @@ type StatusData struct {
 	// PR is the branch's pull request, when gh knows of one — a chip on the
 	// mode row, coloured by its state, clickable to open it.
 	PR *PRInfo
+	// Shells and Agents are the background work running behind the turn: the
+	// commands the agent backgrounded, and the subagents it handed work to.
+	Shells, Agents int
+	// Picking and Pick are the settings row, which is not a row: pressing ↓
+	// highlights the thing it would change where that thing is already
+	// written — the model up in the identity line, the permission mode and
+	// the background work down here — rather than floating a strip of
+	// buttons over the conversation to say the same words twice.
+	Picking bool
+	Pick    controlKind
+}
+
+// pickSpot is where a highlightable value landed, so a click can find it.
+type pickSpot struct {
+	row        int // 0 is the first status row
+	start, end int // half-open columns
+}
+
+// picks records those places while the rows are built, so the map and the
+// drawing can never disagree about where something is.
+type picks map[controlKind]pickSpot
+
+// mark notes the columns a value occupies. rec is nil while nobody is asking.
+func (p picks) mark(kind controlKind, row int, before []seg, s seg) {
+	if p == nil {
+		return
+	}
+	start := segWidth(before)
+	p[kind] = pickSpot{row: row, start: start, end: start + lipgloss.Width(s.text)}
+}
+
+// picked inverts a value while it is the one selected, so the hub itself
+// shows what ↓ is pointing at.
+func picked(s StatusData, kind controlKind, g seg) seg {
+	if !s.Picking || s.Pick != kind {
+		return g
+	}
+	g.bg, g.color, g.bold = T.Purple, T.Surface, true
+	return g
 }
 
 // seg is one run of styled text in the bar. Everything is drawn on the bar's
@@ -249,7 +288,7 @@ func gitSegs(s StatusData) []seg {
 
 // identityRow is who is running, on what, where. Compact terminals get the
 // gauge numbers here too, since the row that would have held them is gone.
-func identityRow(s StatusData, w int, withGauges bool) string {
+func identityRow(s StatusData, w int, withGauges bool, rec picks) string {
 	var l []seg
 	if s.Busy {
 		l = append(l, txt(T.Pink, " "+s.Spin+" "))
@@ -258,7 +297,10 @@ func identityRow(s StatusData, w int, withGauges bool) string {
 	}
 	l = append(l, boldTxt(T.Fg, s.Agent))
 	if s.Model != "" {
-		l = append(l, sep(), txt(T.Purple, "["+s.Model+"]"))
+		l = append(l, sep())
+		g := txt(T.Purple, "["+s.Model+"]")
+		rec.mark(controlModel, 0, l, g)
+		l = append(l, picked(s, controlModel, g))
 	}
 	git := gitSegs(s)
 	if d := shortDir(s.Dir); d != "" {
@@ -326,10 +368,26 @@ func gaugeRow(s StatusData, w int) string {
 
 // modeRow states what the agent may do, carries the transient note, and holds
 // the two buttons.
-func modeRow(s StatusData, w int) string {
+func modeRow(s StatusData, w int, rec picks, row int) string {
 	l := []seg{txt(T.Magenta, " ▸▸ ")}
 	if s.Mode != "" {
-		l = append(l, boldTxt(T.Yellow, s.Mode), txt(T.Muted, " (ctrl+p to change)"))
+		g := boldTxt(T.Yellow, s.Mode)
+		rec.mark(controlPermission, row, l, g)
+		l = append(l, picked(s, controlPermission, g))
+		hint := " (ctrl+p to change)"
+		if s.Picking {
+			hint = " (↑↓ move · enter open · esc close)"
+		}
+		l = append(l, txt(T.Muted, hint))
+	}
+	if s.Shells > 0 || s.Agents > 0 {
+		l = append(l, txt(T.Muted, " · "))
+		g := boldTxt(T.Green, backgroundLabel(s.Shells, s.Agents))
+		rec.mark(controlBackground, row, l, g)
+		l = append(l, picked(s, controlBackground, g))
+		if !s.Picking {
+			l = append(l, txt(T.Muted, " (↓ to see)"))
+		}
 	}
 	if s.Note != "" {
 		l = append(l, txt(T.Muted, " · "), txt(T.Pink, s.Note))
@@ -346,6 +404,27 @@ func modeRow(s StatusData, w int) string {
 		right = append(right, seg{text: themeChip(), color: T.Surface, bg: T.Purple, bold: true})
 	}
 	return statusRow(l, right, w)
+}
+
+// backgroundLabel counts the two kinds the way the CLI's own status line
+// does: shells apart from agents, because they are different things to go
+// and look at.
+func backgroundLabel(shells, agents int) string {
+	var parts []string
+	if shells > 0 {
+		parts = append(parts, plural(shells, "shell", "shells"))
+	}
+	if agents > 0 {
+		parts = append(parts, plural(agents, "agent", "agents"))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return itoa(n) + " " + many
 }
 
 // ThemeToggleRange is the half-open column range [start, end) of the clickable
@@ -429,16 +508,30 @@ func themeChip() string { return chip(CurrentMode().String(), themeToggleWidth) 
 // RenderStatus draws the bar: exactly rows lines, each exactly w columns, with
 // the buttons on the last one.
 func RenderStatus(s StatusData, w, rows int) string {
+	out, _ := renderStatus(s, w, rows, nil)
+	return out
+}
+
+// StatusPicks is where the values ↓ walks between were drawn, so a click can
+// land on them. Built by the same code that draws them, so the two cannot
+// drift apart.
+func StatusPicks(s StatusData, w, rows int) picks {
+	rec := picks{}
+	renderStatus(s, w, rows, rec)
+	return rec
+}
+
+func renderStatus(s StatusData, w, rows int, rec picks) (string, int) {
 	if w <= 0 || rows <= 0 {
-		return ""
+		return "", 0
 	}
 	full := rows >= statusRowsFull
-	out := []string{identityRow(s, w, !full)}
+	out := []string{identityRow(s, w, !full, rec)}
 	if full {
 		out = append(out, gaugeRow(s, w))
 	}
 	for len(out) < rows-1 {
 		out = append(out, statusRow(nil, nil, w))
 	}
-	return strings.Join(append(out, modeRow(s, w)), "\n")
+	return strings.Join(append(out, modeRow(s, w, rec, len(out))), "\n"), len(out)
 }
