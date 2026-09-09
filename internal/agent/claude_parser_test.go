@@ -213,7 +213,7 @@ func TestTaskLifecycleLines(t *testing.T) {
 	if len(started) != 1 || started[0].Kind != KindTask {
 		t.Fatalf("events = %+v", started)
 	}
-	if u := started[0].Task; u.ID != "b4z4j7yds" || u.Status != "running" || u.Type != "local_bash" || u.Desc != "ping -n 4 127.0.0.1" {
+	if u := started[0].Task; u.ID != "b4z4j7yds" || u.Status != "running" || u.Type != "local_bash" || u.Desc != "ping -n 4 127.0.0.1" || !u.Backgrounded {
 		t.Fatalf("started = %+v", u)
 	}
 

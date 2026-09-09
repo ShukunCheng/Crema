@@ -89,19 +89,21 @@ func RenderSidebar(sessions []*Session, active, dragging int, spin string, w, h 
 		if i == dragging {
 			marker = "▌ " // the grab mark: this row is in hand
 		}
-		state := "idle"
-		st := idle
-		if s.busy {
-			state = fmt.Sprintf("%s %.0fs", spin, s.Elapsed().Seconds())
-			st = run
-		}
 		// Work handed to a subagent is still this agent's work, and the
-		// sidebar is the only place every agent is visible at once: without
-		// this, an agent whose subagent is grinding away looks the same as
-		// one thinking by itself.
-		if n := s.RunningTasks(); n > 0 {
-			state += fmt.Sprintf(" +%d", n)
-			st = run
+		// sidebar is the only place every agent is visible at once. An agent
+		// whose subagent is grinding away is not idle — saying "idle" beside
+		// a running count was the sidebar contradicting itself.
+		state, st := "idle", idle
+		bg := s.RunningTasks()
+		switch {
+		case s.busy && bg > 0:
+			state, st = fmt.Sprintf("%s %.0fs +%d", spin, s.Elapsed().Seconds(), bg), run
+		case s.busy:
+			state, st = fmt.Sprintf("%s %.0fs", spin, s.Elapsed().Seconds()), run
+		case bg > 0:
+			// The turn is over but its background work is not, which is the
+			// point of backgrounding it.
+			state, st = fmt.Sprintf("%s +%d", spin, bg), run
 		}
 		// index prefix doubles as the alt+N jump hint
 		head := fmt.Sprintf("%s%d %s", marker, i+1, s.Title())

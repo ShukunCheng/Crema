@@ -157,6 +157,96 @@ func TestCtrlArrowJumpsAWord(t *testing.T) {
 	}
 }
 
+// ctrl+arrow stops at punctuation, not only at spaces — the same rule
+// ctrl+backspace deletes by. Walking through a branch name a press at a time
+// is the whole point; the text area's own rule stepped over the lot.
+func TestCtrlArrowStopsAtPunctuation(t *testing.T) {
+	a := testApp(t)
+	typeRunes(t, a, "on fix/12-order now")
+	// From the end, walk left and mark where each press lands.
+	for _, want := range []string{
+		"on fix/12-order Xnow",
+		"on fix/12-Xorder now",
+		"on fix/12X-order now",
+		"on fix/X12-order now",
+		"on fixX/12-order now",
+		"on Xfix/12-order now",
+		"Xon fix/12-order now",
+	} {
+		press(t, a, tea.KeyMsg{Type: tea.KeyCtrlLeft})
+		typeRunes(t, a, "X")
+		if got := a.in.Value(); got != want {
+			t.Fatalf("ctrl+← landed at %q, want %q", got, want)
+		}
+		// Take the marker back out and put the caret where it was.
+		press(t, a, kmsg(tea.KeyBackspace))
+	}
+}
+
+// ctrl+→ is the mirror: over any whitespace in the way, then one run.
+func TestCtrlRightStopsAtPunctuation(t *testing.T) {
+	a := testApp(t)
+	typeRunes(t, a, "on fix/12-order now")
+	press(t, a, kmsg(tea.KeyHome))
+	for _, want := range []string{
+		"onX fix/12-order now",
+		"on fixX/12-order now",
+		"on fix/X12-order now",
+		"on fix/12X-order now",
+		"on fix/12-Xorder now",
+		"on fix/12-orderX now",
+		"on fix/12-order nowX",
+	} {
+		press(t, a, tea.KeyMsg{Type: tea.KeyCtrlRight})
+		typeRunes(t, a, "X")
+		if got := a.in.Value(); got != want {
+			t.Fatalf("ctrl+→ landed at %q, want %q", got, want)
+		}
+		press(t, a, kmsg(tea.KeyBackspace))
+	}
+}
+
+// Jumping and deleting have to agree about where a word ends, or ctrl+← then
+// ctrl+backspace takes something other than what you just walked past.
+func TestJumpingAndDeletingAgree(t *testing.T) {
+	for _, draft := range []string{
+		"fix/1234-order-workspace-issue",
+		"path/to/file.go and some prose",
+		"call(arg) === other_thing",
+	} {
+		jump := testApp(t)
+		typeRunes(t, jump, draft)
+		press(t, jump, tea.KeyMsg{Type: tea.KeyCtrlLeft})
+		// Everything from the caret on is what ctrl+backspace would have taken.
+		walked := len([]rune(draft)) - len(jump.in.beforeCursor())
+
+		del := testApp(t)
+		typeRunes(t, del, draft)
+		press(t, del, tea.KeyMsg{Type: tea.KeyCtrlH})
+		deleted := len([]rune(draft)) - len([]rune(del.in.Value()))
+
+		if walked != deleted {
+			t.Errorf("on %q ctrl+← walked %d runes but ctrl+backspace took %d",
+				draft, walked, deleted)
+		}
+	}
+}
+
+// At the start of a line ctrl+← steps up to the end of the one above, the way
+// a plain arrow does, rather than sitting still.
+func TestCtrlArrowCrossesALineBreak(t *testing.T) {
+	a := testApp(t)
+	typeRunes(t, a, "first")
+	a.Update(tea.KeyMsg{Type: tea.KeyCtrlJ}) // newline
+	typeRunes(t, a, "second")
+	press(t, a, tea.KeyMsg{Type: tea.KeyCtrlLeft}) // to the start of "second"
+	press(t, a, tea.KeyMsg{Type: tea.KeyCtrlLeft}) // over the break
+	typeRunes(t, a, "X")
+	if got := a.in.Value(); got != "firstX\nsecond" {
+		t.Fatalf("draft = %q", got)
+	}
+}
+
 // pasteClock makes every key look like it arrived at replay speed, the way a
 // console does when it replays pasted text as keystrokes.
 func pasteClock(t *testing.T) {
@@ -329,6 +419,77 @@ func TestCtrlBackspaceDeletesAWord(t *testing.T) {
 	a.Update(kmsg(tea.KeyBackspace))
 	if got := a.in.Value(); got != "fix the" {
 		t.Fatalf("plain backspace should delete one character: %q", got)
+	}
+}
+
+// A word ends at punctuation, not only at a space. The text area's own rule
+// is "back to the nearest space", which on a branch name is the whole thing:
+// ctrl+backspace at the end of fix/1234-order-workspace-issue used to take
+// all of it when what was wanted was "issue".
+func TestCtrlBackspaceStopsAtPunctuation(t *testing.T) {
+	a := testApp(t)
+	typeRunes(t, a, "check out fix/1234-order-workspace-issue")
+	for _, want := range []string{
+		"check out fix/1234-order-workspace-", // the word
+		"check out fix/1234-order-workspace",  // then the dash between words
+		"check out fix/1234-order-",
+		"check out fix/1234-order",
+		"check out fix/1234-",
+		"check out fix/1234",
+		"check out fix/",
+		"check out fix",
+		"check out ",
+		"check ",
+		"",
+	} {
+		a.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+		if got := a.in.Value(); got != want {
+			t.Fatalf("ctrl+backspace = %q, want %q", got, want)
+		}
+	}
+}
+
+// Trailing whitespace goes with the word behind it rather than costing a
+// press of its own, and a run of punctuation goes together.
+func TestCtrlBackspaceTakesTheSpacesWithTheWord(t *testing.T) {
+	for _, c := range []struct{ draft, want string }{
+		{"one two   ", "one "},
+		{"path/to/file.go", "path/to/file."},
+		{"call(arg)", "call(arg"},
+		{"call(arg", "call("},
+		{"a === b", "a === "},
+		{"snake_case_name here", "snake_case_name "},
+		{"café", ""},
+		{"  ", ""},
+	} {
+		a := testApp(t)
+		typeRunes(t, a, c.draft)
+		a.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+		if got := a.in.Value(); got != c.want {
+			t.Errorf("ctrl+backspace on %q = %q, want %q", c.draft, got, c.want)
+		}
+	}
+}
+
+// On the second line of a draft, the word is the one on that line — and at
+// the very start of it, ctrl+backspace joins the rows the way backspace does.
+func TestCtrlBackspaceOnALaterLine(t *testing.T) {
+	a := testApp(t)
+	typeRunes(t, a, "first line")
+	a.Update(tea.KeyMsg{Type: tea.KeyCtrlJ}) // newline
+	typeRunes(t, a, "second-word")
+	a.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+	if got := a.in.Value(); got != "first line\nsecond-" {
+		t.Fatalf("input = %q", got)
+	}
+	a.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+	a.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+	if got := a.in.Value(); got != "first line\n" {
+		t.Fatalf("the second line should be empty, got %q", got)
+	}
+	a.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+	if got := a.in.Value(); got != "first line" {
+		t.Fatalf("at the start of a line it should join the rows, got %q", got)
 	}
 }
 

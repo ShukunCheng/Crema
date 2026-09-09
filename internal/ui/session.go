@@ -24,11 +24,9 @@ type Session struct {
 	// saved between runs. Name is what you called this agent, empty until you
 	// call it something.
 	Permission agent.PermissionMode
-	// AutoCompact folds the conversation up before it grows expensive. On by
-	// default, which is what the CLI's own interactive sessions do.
-	AutoCompact bool
-	Model       string
-	Name        string
+	Model      string
+	Effort     string
+	Name       string
 
 	tl *Timeline
 	dp *DiffPanel
@@ -44,6 +42,11 @@ type Session struct {
 	// and backgrounded commands — newest report merged over the last. /tasks
 	// reads it; the working line counts the running ones.
 	tasks []agent.TaskUpdate
+	// subs are the subagents whose own transcripts crema is reading, keyed by
+	// the CLI's task id. Opened when one is first looked at or first runs,
+	// and kept afterwards: a finished subagent's transcript is the record of
+	// what it did, and throwing it away would be throwing away the answer.
+	subs map[string]*subagentView
 	// lastResult is the newest result line of the running turn. A turn can
 	// end more than once — an async task continues it — so results are
 	// absorbed as they come and the stream closing is what ends the turn.
@@ -72,6 +75,12 @@ type Session struct {
 	// having, so it is let go.
 	convAt   time.Time
 	canceled bool
+	// compactFrom is how big the conversation was when folding it up began,
+	// for the line that says so while it happens.
+	compactFrom int64
+	// pending is what each control request still awaiting the CLI's answer
+	// asked for, by request id, so a refusal can be acted on.
+	pending map[string]string
 
 	pr         *PRInfo
 	prBranch   string
@@ -239,14 +248,13 @@ func defaultMode(backend agent.Agent) agent.PermissionMode {
 
 func NewSession(id int, backend agent.Agent, dir string) *Session {
 	s := &Session{
-		ID:          id,
-		Backend:     backend,
-		Dir:         dir,
-		Permission:  defaultMode(backend),
-		Model:       agent.DefaultModel,
-		AutoCompact: true,
-		tl:          NewTimeline(80, 20),
-		dp:          NewDiffPanel(40, 20),
+		ID:         id,
+		Backend:    backend,
+		Dir:        dir,
+		Permission: defaultMode(backend),
+		Model:      agent.DefaultModel,
+		tl:         NewTimeline(80, 20),
+		dp:         NewDiffPanel(40, 20),
 	}
 	// The allowance is a fact about the account, not about a turn: worth
 	// showing before the first message rather than only after it.
@@ -275,7 +283,17 @@ func (s *Session) SetPermission(p agent.PermissionMode) {
 		return
 	}
 	s.Permission = p
-	s.closeConv() // the mode is a command-line flag: the next turn needs a new process
+	// A held-open process takes the change on its stdin and keeps its cache;
+	// only a backend without that has to be restarted with the new flag.
+	if ctl, ok := s.controller(); ok {
+		if id, err := ctl.SetPermission(p); err == nil {
+			s.await(id, "set_permission_mode")
+		} else {
+			s.closeConv()
+		}
+	} else {
+		s.closeConv()
+	}
 	s.tl.Append(Block{Kind: BlockSystem, Text: s.modeNote()})
 }
 
@@ -285,12 +303,53 @@ func (s *Session) SetModel(m string) {
 		return
 	}
 	s.Model = m
-	s.closeConv() // likewise the model
+	if ctl, ok := s.controller(); ok {
+		if id, err := ctl.SetModel(m); err == nil {
+			s.await(id, "set_model")
+		} else {
+			s.closeConv()
+		}
+	} else {
+		s.closeConv() // a command-line flag: the next turn needs a new process
+	}
 	name := m
 	if m == agent.DefaultModel {
 		name = "the CLI's default"
 	}
 	s.tl.Append(Block{Kind: BlockSystem, Text: "model: " + name + " (applies to the next message)"})
+}
+
+// SetEffort changes how hard the agent is asked to think about a turn.
+//
+// Unlike the model and the permission mode, this cannot be switched under a
+// live process: the CLI's stdin protocol has set_model and set_permission_mode
+// and nothing for effort, so it travels on the command line and the next
+// message needs a new process. That is a cold start, and it is said out loud
+// rather than left to be discovered in the bill.
+func (s *Session) SetEffort(level string) {
+	if s.Effort == level {
+		return
+	}
+	s.Effort = level
+	had := s.conv != nil
+	s.closeConv()
+	name := level
+	if level == agent.DefaultEffort {
+		name = "the CLI's default"
+	}
+	line := "effort: " + name + " (applies to the next message)"
+	if had {
+		line += " — the CLI takes this on the command line, so that message opens a new process and pays to re-read the conversation once"
+	}
+	s.tl.Append(Block{Kind: BlockSystem, Text: line})
+}
+
+// efforts is what this backend offers, or nothing when it has no such setting.
+func (s *Session) efforts() []string {
+	if e, ok := s.Backend.(agent.EffortChooser); ok {
+		return e.Efforts()
+	}
+	return nil
 }
 
 // Title is the sidebar label: the name you gave this agent, or failing that
@@ -329,6 +388,11 @@ func (s *Session) Elapsed() time.Duration {
 
 func (s *Session) SetSize(timelineW, diffW, paneH int) {
 	s.tl.SetSize(timelineW, paneH)
+	for _, v := range s.subs {
+		// A subagent's transcript is drawn in the same pane, minus the header
+		// row that says whose it is.
+		v.tl.SetSize(timelineW, max(1, paneH-1))
+	}
 	if diffW > 0 {
 		s.dp.SetSize(diffW-2, paneH-2) // inside the rounded border
 	}
@@ -358,7 +422,7 @@ func (s *Session) startTurn(shown, prompt string) tea.Cmd {
 	s.canceled = false
 	s.lastOpts = agent.RunOptions{
 		Prompt: prompt, Dir: s.Dir, SessionID: s.agentSID,
-		Permission: s.Permission, Model: s.Model,
+		Permission: s.Permission, Model: s.Model, Effort: s.Effort,
 	}
 	if _, ok := s.Backend.(agent.Streamer); ok {
 		return s.sendToConv(prompt)
@@ -426,13 +490,24 @@ func (s *Session) endTurn() {
 		s.cancel()
 		s.cancel = nil
 	}
-	// A background task belongs to the run that launched it. If the CLI
-	// exited without ever saying how one ended, it is not still going —
-	// nothing is left to run it — so it stops being counted as running
-	// rather than haunting the sidebar with work that finished unseen.
+	if s.conv == nil {
+		// The process went with the turn, so nothing is left running what it
+		// had started. A held-open conversation is the other case entirely:
+		// a subagent outliving the turn that launched it is the whole point
+		// of backgrounding one, and sweeping here made background work
+		// vanish from the sidebar the moment the turn ended.
+		s.endStrayTasks()
+	}
+}
+
+// endStrayTasks stops counting work whose process is gone. The CLI says how
+// a task ended while it is alive; if it exits without ever saying, the task
+// is not still going — nothing is left to run it — and it should not haunt
+// the sidebar as though it were.
+func (s *Session) endStrayTasks() {
 	for i := range s.tasks {
 		if s.tasks[i].Status == "running" {
-			s.tasks[i].Status = "ended with the turn"
+			s.tasks[i].Status, s.tasks[i].Ended = "ended with its process", time.Now()
 		}
 	}
 }
@@ -451,6 +526,9 @@ func (s *Session) noteTask(u *agent.TaskUpdate) {
 		}
 		t := &s.tasks[i]
 		if u.Status != "" {
+			if t.Status == "running" && u.Status != "running" {
+				t.Ended = time.Now() // what the roster counts its last moments from
+			}
 			t.Status = u.Status
 		}
 		if u.Desc != "" {
@@ -468,13 +546,20 @@ func (s *Session) noteTask(u *agent.TaskUpdate) {
 		if u.ToolUses > 0 {
 			t.ToolUses = u.ToolUses
 		}
+		if u.SpawnDepth > 0 {
+			t.SpawnDepth = u.SpawnDepth
+		}
 		if u.OutputFile != "" {
 			t.OutputFile = u.OutputFile
 		}
 		if u.Summary != "" {
 			t.Summary = u.Summary
 		}
+		t.Backgrounded = t.Backgrounded || u.Backgrounded
 		return
+	}
+	if u.Started.IsZero() {
+		u.Started = time.Now()
 	}
 	s.tasks = append(s.tasks, *u)
 }
@@ -582,6 +667,97 @@ func (s *Session) sendToConv(prompt string) tea.Cmd {
 	return waitForEvent(s.stream, s.ID, s.streamSeq)
 }
 
+// controller is the conversation's control channel, when it has one.
+func (s *Session) controller() (agent.Controller, bool) {
+	if s.conv == nil {
+		return nil, false
+	}
+	ctl, ok := s.conv.(agent.Controller)
+	return ctl, ok
+}
+
+// await notes a control request the CLI has yet to answer.
+func (s *Session) await(id, what string) {
+	if s.pending == nil {
+		s.pending = map[string]string{}
+	}
+	s.pending[id] = what
+}
+
+// noteControl acts on the CLI's answer. A refused model or mode switch falls
+// back to what crema did before there was a control channel: let the process
+// go, so the next turn starts one with the setting on its command line. The
+// note says so, because that turn will cost a cold start.
+func (s *Session) noteControl(r *agent.ControlReply) string {
+	if r == nil {
+		return ""
+	}
+	what := s.pending[r.RequestID]
+	delete(s.pending, r.RequestID)
+	if r.OK {
+		if id, isStop := strings.CutPrefix(what, "stop_task:"); isStop {
+			for i := range s.tasks {
+				if s.tasks[i].ID == id && s.tasks[i].Status == "running" {
+					s.tasks[i].Status = "stopped"
+				}
+			}
+		}
+		return ""
+	}
+	if strings.HasPrefix(what, "stop_task:") {
+		what = "stop_task"
+	}
+	switch what {
+	case "set_model", "set_permission_mode":
+		s.closeConv()
+		return "the CLI would not switch live (" + r.Err + ") — the next message starts a fresh process with the new setting"
+	case "stop_task":
+		return "could not stop it: " + r.Err
+	case "interrupt":
+		return "could not interrupt: " + r.Err
+	}
+	return r.Err
+}
+
+// stopTask asks the CLI to stop one background task. Only a held-open
+// conversation can be asked. Measured live: the CLI answers ok and stops it,
+// but sends no lifecycle line for the task afterwards — so the ok reply is
+// what marks it stopped here, rather than waiting for a word that never
+// comes and showing a stopped task as running.
+func (s *Session) stopTask(id string) bool {
+	ctl, ok := s.controller()
+	if !ok {
+		return false
+	}
+	rid, err := ctl.StopTask(id)
+	if err != nil {
+		return false
+	}
+	s.await(rid, "stop_task:"+id)
+	return true
+}
+
+// noteTaskList takes the CLI's own list of background work as the truth
+// about it: a backgrounded task it no longer lists has ended, however it
+// ended. Measured on a real capture, the list carries backgrounded
+// subagents as well as shells, and empties when the last one finishes. A
+// foreground subagent — one holding the turn — is never on it, so its
+// absence says nothing and it is left to its own lifecycle lines.
+func (s *Session) noteTaskList(list []agent.TaskUpdate) {
+	present := map[string]bool{}
+	for i := range list {
+		present[list[i].ID] = true
+		u := list[i]
+		s.noteTask(&u)
+	}
+	for i := range s.tasks {
+		t := &s.tasks[i]
+		if t.Status == "running" && t.Backgrounded && !present[t.ID] {
+			t.Status, t.Ended = "finished", time.Now()
+		}
+	}
+}
+
 // closeConv ends the agent's process. The conversation itself is not lost —
 // the CLI keeps the transcript, and the next turn resumes it by id — so this
 // is what every setting that lives on the command line does: model,
@@ -590,6 +766,7 @@ func (s *Session) closeConv() {
 	if s.conv != nil {
 		go s.conv.Close() // draining its channel can block; never on the UI
 		s.conv = nil
+		s.endStrayTasks() // whatever it was running went with it
 	}
 	if s.convStop != nil {
 		s.convStop()
@@ -621,6 +798,15 @@ const convIdleLife = time.Hour
 func (s *Session) cancelTurn() bool {
 	if !s.busy {
 		return false
+	}
+	if ctl, ok := s.controller(); ok {
+		// The CLI stops the turn and ends it with a result line as usual,
+		// and the process — and the conversation's cache — lives on.
+		s.canceled = true
+		if _, err := ctl.Interrupt(); err == nil {
+			s.tl.Append(Block{Kind: BlockSystem, Text: "interrupting the current turn…"})
+			return true
+		}
 	}
 	if s.conv != nil {
 		s.canceled = true

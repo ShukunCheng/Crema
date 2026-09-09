@@ -27,19 +27,30 @@ type ClaudeParser struct {
 }
 
 type claudeLine struct {
-	Type         string         `json:"type"`
-	Subtype      string         `json:"subtype"`
-	ParentTool   string         `json:"parent_tool_use_id"`
-	TaskID       string         `json:"task_id"`
-	ToolUseID    string         `json:"tool_use_id"`
-	Description  string         `json:"description"`
-	SubagentType string         `json:"subagent_type"`
-	TaskType     string         `json:"task_type"`
-	LastToolName string         `json:"last_tool_name"`
-	Status       string         `json:"status"`
-	OutputFile   string         `json:"output_file"`
-	Summary      string         `json:"summary"`
-	Patch        *statusPatch   `json:"patch"`
+	Type         string       `json:"type"`
+	Subtype      string       `json:"subtype"`
+	ParentTool   string       `json:"parent_tool_use_id"`
+	TaskID       string       `json:"task_id"`
+	ToolUseID    string       `json:"tool_use_id"`
+	Description  string       `json:"description"`
+	SubagentType string       `json:"subagent_type"`
+	TaskType     string       `json:"task_type"`
+	LastToolName string       `json:"last_tool_name"`
+	Status       string       `json:"status"`
+	OutputFile   string       `json:"output_file"`
+	Backgrounded bool         `json:"is_backgrounded"`
+	SpawnDepth   int          `json:"spawn_depth"`
+	Summary      string       `json:"summary"`
+	Patch        *statusPatch `json:"patch"`
+	// Response is a control_response line's body: the CLI answering a
+	// request crema wrote down its stdin.
+	Response *controlResponse `json:"response"`
+	// Tasks is background_tasks_changed's list.
+	Tasks []struct {
+		TaskID      string `json:"task_id"`
+		TaskType    string `json:"task_type"`
+		Description string `json:"description"`
+	} `json:"tasks"`
 	SessionID    string         `json:"session_id"`
 	Message      *claudeMessage `json:"message"`
 	IsError      bool           `json:"is_error"`
@@ -115,6 +126,15 @@ type statusPatch struct {
 	Status string `json:"status"`
 }
 
+// controlResponse answers a control request by id: success with whatever the
+// request returns, or error with the CLI's own words.
+type controlResponse struct {
+	Subtype   string          `json:"subtype"`
+	RequestID string          `json:"request_id"`
+	Error     string          `json:"error"`
+	Response  json.RawMessage `json:"response"`
+}
+
 // context is everything the model had to read this turn — fresh input plus
 // both halves of the cache. That sum is what fills the context window.
 func (u claudeUsage) context() int64 {
@@ -144,8 +164,28 @@ func (p *ClaudeParser) ParseLine(line []byte) []Event {
 		switch l.Subtype {
 		case "task_started", "task_progress", "task_updated", "task_notification":
 			return []Event{{Kind: KindTask, Task: taskUpdate(&l)}}
+		case "background_tasks_changed":
+			// Measured (2.1.250): the whole list, sent when one starts and
+			// when the list empties; it carries backgrounded subagents as
+			// well as shells.
+			list := make([]TaskUpdate, 0, len(l.Tasks))
+			for _, t := range l.Tasks {
+				list = append(list, TaskUpdate{ID: t.TaskID, Type: t.TaskType, Desc: t.Description,
+					Status: "running", Backgrounded: true})
+			}
+			return []Event{{Kind: KindTaskList, Tasks: list}}
 		}
 		return nil // init records the session id above; other subtypes are tolerated
+	case "control_response":
+		if l.Response == nil {
+			return nil
+		}
+		return []Event{{Kind: KindControl, Control: &ControlReply{
+			RequestID: l.Response.RequestID,
+			OK:        l.Response.Subtype == "success",
+			Err:       l.Response.Error,
+			Response:  l.Response.Response,
+		}}}
 	case "rate_limit_event":
 		if info := l.RateLimitInfo; info != nil {
 			legacy := RateLimit{
@@ -312,14 +352,16 @@ func flattenContent(raw json.RawMessage) string {
 func taskUpdate(l *claudeLine) *TaskUpdate {
 	u := &TaskUpdate{
 		ID: l.TaskID, ToolUseID: l.ToolUseID, Desc: l.Description,
-		Type: l.SubagentType, LastTool: l.LastToolName,
+		Type: l.SubagentType, LastTool: l.LastToolName, SpawnDepth: l.SpawnDepth,
 		OutputFile: l.OutputFile, Summary: l.Summary, Status: l.Status,
 	}
 	if u.Type == "" {
 		u.Type = l.TaskType
 	}
 	switch l.Subtype {
-	case "task_started", "task_progress":
+	case "task_started":
+		u.Status, u.Backgrounded = "running", l.Backgrounded
+	case "task_progress":
 		u.Status = "running"
 	}
 	if u.Status == "" && l.Patch != nil {

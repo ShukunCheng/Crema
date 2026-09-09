@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -62,6 +63,18 @@ func (s *selection) end() bool {
 	s.selecting = false
 	s.active = s.anchor != s.cursor
 	return s.active
+}
+
+// selectSpan lays a finished selection over one line's column range, which is
+// what a double-click leaves behind: no drag ever happened, but there is a
+// highlight, and it may be copied like any other.
+func (s *selection) selectSpan(line, start, end int) bool {
+	if start >= end {
+		return false
+	}
+	s.anchor, s.cursor = selPoint{line, start}, selPoint{line, end}
+	s.selecting, s.active = false, true
+	return true
 }
 
 func (s *selection) clear() bool {
@@ -132,6 +145,58 @@ func (s *selection) spanOn(line string, i int, a, b selPoint) (int, int) {
 	return start, end
 }
 
+// wordSpanAt is the column range of the word under col on a rendered line —
+// the columns, not the runes, because that is what the selection paints and
+// cuts with and a wide character occupies two of them.
+//
+// A word is a run of letters, digits and underscores, or a run of the
+// punctuation between two of them: the same rule ctrl+backspace uses in the
+// input box, and the same one every editor and every terminal applies to a
+// double-click. Double-clicking `app` in `internal/ui/app.go` gives `app`
+// rather than the whole path, and a click on the dot gives the dot.
+//
+// It returns an empty range for whitespace and for a click past the end of the
+// line, where there is no word to be had.
+func wordSpanAt(line string, col int) (int, int) {
+	runes := []rune(ansi.Strip(line))
+	// Where each rune starts and ends in display columns.
+	starts := make([]int, len(runes)+1)
+	for i, r := range runes {
+		starts[i+1] = starts[i] + runeWidth(r)
+	}
+	at := -1
+	for i := range runes {
+		if col >= starts[i] && col < starts[i+1] {
+			at = i
+			break
+		}
+	}
+	if at < 0 || unicode.IsSpace(runes[at]) {
+		return 0, 0
+	}
+	word := isWordRune(runes[at])
+	lo, hi := at, at+1
+	for lo > 0 {
+		r := runes[lo-1]
+		if unicode.IsSpace(r) || isWordRune(r) != word {
+			break
+		}
+		lo--
+	}
+	for hi < len(runes) {
+		r := runes[hi]
+		if unicode.IsSpace(r) || isWordRune(r) != word {
+			break
+		}
+		hi++
+	}
+	return starts[lo], starts[hi]
+}
+
+// runeWidth is a rune's width in terminal columns, which is what the selection
+// measures in.
+func runeWidth(r rune) int { return lipgloss.Width(string(r)) }
+
 // stripRail removes a leading tool-block guide from a copied line.
 func stripRail(s string) string {
 	return strings.TrimPrefix(s, "│ ")
@@ -171,6 +236,23 @@ func (t *Timeline) ClearSelection() {
 }
 
 func (t *Timeline) HasSelection() bool { return t.sel.done() }
+
+// SelectWordAt highlights the word under a content position, which is what a
+// double-click asks for. It reports false when there is no word there — over
+// blank space, or past the end of the line — so the caller can leave the
+// press to mean whatever it meant before.
+func (t *Timeline) SelectWordAt(line, col int) bool {
+	lines := t.contentLines()
+	if line < 0 || line >= len(lines) {
+		return false
+	}
+	start, end := wordSpanAt(lines[line], col)
+	if !t.sel.selectSpan(line, start, end) {
+		return false
+	}
+	t.sync()
+	return true
+}
 
 // SelectedText is the plain text under the highlight.
 func (t *Timeline) SelectedText() string { return t.sel.text(t.contentLines()) }

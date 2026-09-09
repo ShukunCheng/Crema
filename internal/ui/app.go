@@ -162,6 +162,32 @@ type App struct {
 	dragging    dragPane // which pane a text selection is being dragged in
 	dragAgent   int      // the sidebar row being moved, or noDrag
 	dragMoved   bool     // whether the drag went anywhere, so a mere click is not announced
+	// dragWord marks a selection a double-click made rather than a drag. The
+	// word is chosen on the press, so the release must not drag the loose end
+	// of it out to wherever the button happened to come up.
+	dragWord bool
+	// lastCell and lastPaneClick are the previous press in a text pane, for
+	// telling a double-click from two separate ones.
+	lastCell      selPoint
+	lastPaneClick time.Time
+	// recipient is the subagent the next message is for, chosen from the
+	// roster. Crema cannot reach a subagent's stdin — the CLI has no such
+	// door — so the message goes to the agent with the ask to relay it by
+	// SendMessage, which is the CLI's own way of talking to one.
+	recipient *agent.TaskUpdate
+	// viewing is the task id whose own transcript is in the conversation
+	// pane, "" for the agent's own. Enter on a roster row puts one here, the
+	// way enter on the CLI's subagent panel opens that agent's conversation.
+	viewing string
+	// subTicking says a transcript poll is already in flight, so a burst of
+	// task lines does not stack up a tick each.
+	subTicking bool
+	// chordAt is when ctrl+x was pressed, and stopAllAt when the chord was
+	// last completed: stopping everything takes it twice, the way it does in
+	// the CLI, because it is not a thing to do by leaning on a key.
+	chordAt   time.Time
+	stopAllAt time.Time
+	holdText  string // the input's usual placeholder, to put back
 	// lastRow and lastClick are the previous press in the sidebar, for telling
 	// a double-click (rename) from two separate ones.
 	lastRow   int
@@ -313,6 +339,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.sp, cmd = a.sp.Update(msg)
 		return a, cmd
 
+	case subTickMsg:
+		// Read whatever the running subagents have written since the last
+		// look. Only re-armed while there is something to read, so an idle
+		// crema is back to its ten-second heartbeat and no file is stat'd.
+		a.subTicking = false
+		for _, s := range a.sessions {
+			s.pollSubagents()
+		}
+		return a, a.pollSubagents()
+
 	case heartbeatMsg:
 		// The refresh itself happens in View, which this message exists to
 		// cause; re-arm and let the frame do the reading.
@@ -346,12 +382,30 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.persist()
 			return a, waitForEvent(s.stream, s.ID, msg.seq)
 		}
+		if msg.ev.Kind == agent.KindControl {
+			if note := s.noteControl(msg.ev.Control); note != "" {
+				a.note = note
+			}
+			return a, waitForEvent(s.stream, s.ID, msg.seq)
+		}
+		if msg.ev.Kind == agent.KindTurnEnd && s.canceled && msg.ev.Result != nil {
+			// An interrupted turn ends however the CLI ends it; the asking
+			// was the point, and it is not an error worth a red block.
+			msg.ev.Result.Err = ""
+		}
 		s.noteActivity(msg.ev) // what the working line says it is doing
 		s.tl.AppendEvent(msg.ev)
 		cmds := []tea.Cmd{waitForEvent(s.stream, s.ID, msg.seq)}
 		switch msg.ev.Kind {
+		case agent.KindTaskList:
+			s.noteTaskList(msg.ev.Tasks)
+			a.resize(a.w, a.h)
 		case agent.KindTask:
 			s.noteTask(msg.ev.Task)
+			cmds = append(cmds, a.pollSubagents())
+			// Work starting or finishing changes how many rows the roster
+			// takes, and the panes owe it those rows.
+			a.resize(a.w, a.h)
 		case agent.KindToolOutput:
 			cmds = append(cmds, s.scheduleDiff())
 		case agent.KindTurnEnd:
@@ -412,9 +466,75 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, a.routeToFocus(msg)
 }
 
+// anyBusy decides whether the spinner keeps ticking. Background work counts:
+// a subagent still running is work in progress, and its sidebar row wears the
+// spinner, which would otherwise be frozen on whatever frame it stopped at.
+// pollSubagents arms the transcript poll when there is a transcript worth
+// polling, and returns nil when there is not — which is what stops crema
+// waking up twice a second for the rest of the run.
+func (a *App) pollSubagents() tea.Cmd {
+	if a.subTicking {
+		return nil
+	}
+	for _, s := range a.sessions {
+		if s.subagentPending() {
+			a.subTicking = true
+			return subTick()
+		}
+	}
+	return nil
+}
+
+// chordWindow is how long ctrl+x waits for its second key, and stopAllWindow
+// how long the completed chord waits to be confirmed by another. Both are the
+// CLI's own three seconds.
+const (
+	chordWindow   = 3 * time.Second
+	stopAllWindow = 3 * time.Second
+)
+
+// stopAllTasks is the second half of ctrl+x ctrl+k: stop every subagent this
+// agent has running. Asked for twice, because a chord is easy to hit by
+// accident and a subagent halfway through something is expensive to lose.
+func (a *App) stopAllTasks() tea.Cmd {
+	s := a.cur()
+	if s == nil {
+		return nil
+	}
+	var ids []string
+	for _, t := range s.tasks {
+		if t.Status == "running" {
+			ids = append(ids, t.ID)
+		}
+	}
+	if len(ids) == 0 {
+		a.note = "nothing is running in the background"
+		return nil
+	}
+	if time.Since(a.stopAllAt) > stopAllWindow {
+		a.stopAllAt = time.Now()
+		a.note = fmt.Sprintf("ctrl+x ctrl+k again to stop all %d — %s",
+			len(ids), backgroundLabel(s.Background()))
+		return nil
+	}
+	a.stopAllAt = time.Time{}
+	stopped := 0
+	for _, id := range ids {
+		if s.stopTask(id) {
+			stopped++
+		}
+	}
+	if stopped == 0 {
+		a.note = "this agent's process cannot be asked to stop its tasks"
+		return nil
+	}
+	a.note = fmt.Sprintf("stopping all %d…", stopped)
+	return nil
+}
+
 func (a *App) anyBusy() bool {
 	for _, s := range a.sessions {
-		if s.busy {
+		if s.busy || s.RunningTasks() > 0 {
 			return true
 		}
 	}
@@ -441,6 +561,35 @@ func (a *App) applyControl(chosen *controlOption, closed bool) tea.Cmd {
 		return nil
 	}
 	switch chosen.kind {
+	case controlAgent:
+		// Open its own transcript and address the next message to it, which
+		// is what enter does on the CLI's subagent panel: you are looking at
+		// that agent's conversation and typing into it. Esc puts both back.
+		// A row being kept for its last seconds after ending is only worth
+		// reading — there is nothing left to talk to.
+		for i := range s.tasks {
+			if s.tasks[i].ID == chosen.task && s.tasks[i].Status == "running" {
+				a.addressTo(&s.tasks[i])
+				break
+			}
+		}
+		a.viewing = chosen.task
+		s.pollSubagents()
+		a.controls = nil
+		a.focus = focusInput
+		a.resize(a.w, a.h)
+		return a.in.Focus()
+	case controlStop:
+		if t := s.task(chosen.task); t != nil && t.Status != "running" {
+			a.note = chosen.label + " has already stopped"
+			return nil
+		}
+		if s.stopTask(chosen.task) {
+			a.note = "stopping " + chosen.label + "…"
+		} else {
+			a.note = "this agent's process cannot be asked to stop a task"
+		}
+		return nil
 	case controlBackground:
 		// Show what it has been up to, in the conversation, where there is
 		// room for it and where it stays.
@@ -455,6 +604,8 @@ func (a *App) applyControl(chosen *controlOption, closed bool) tea.Cmd {
 		s.SetModel(chosen.model) // "" is a real choice here: the CLI's own default
 	case controlPermission:
 		s.SetPermission(chosen.perm)
+	case controlEffort:
+		s.SetEffort(chosen.effort) // "" is a real choice: the CLI's own default
 	}
 	s.tl.GotoEnd() // the change is written into the conversation; show it
 	a.persist()
@@ -727,6 +878,18 @@ func (a *App) sendText(text string) tea.Cmd {
 	}
 	s.remember(text) // ↑ finds it again, whatever it turns out to be
 	a.endBrowsing()
+	// Sending is the end of reading. Wherever the pane had wandered — scrolled
+	// back through the conversation, or off in a subagent's transcript — what
+	// happens next lands at the bottom of this agent's own conversation, so
+	// that is where the pane goes and stays. Without this a message sent while
+	// scrolled up went somewhere the eye was not: startTurn scrolled down, but
+	// a message sent into a busy turn only joins the queue, and the queue is
+	// drawn at the bottom too.
+	if a.viewing != "" {
+		a.viewing = ""
+		defer a.resize(a.w, a.h)
+	}
+	s.tl.GotoEnd()
 	// The CLIs' own /clear, /model and friends only exist in their
 	// interactive interfaces; headless, they are just prompts. Crema does
 	// the ones it can do itself rather than paying for a shrug.
@@ -739,6 +902,16 @@ func (a *App) sendText(text string) tea.Cmd {
 	images := a.images
 	a.images = nil // the markers went with the draft
 	a.in.Reset()
+	if to := a.recipient; to != nil {
+		// A message for a subagent goes to the agent, with the ask to pass
+		// it on. The transcript shows who it was for; the agent gets the
+		// instruction spelled out, since it is the one holding the line.
+		text = "→ " + to.Type + ": " + text
+		prompt = fmt.Sprintf("Deliver the following message to your running subagent %s (%s) "+
+			"with SendMessage, verbatim, then report back what it says or does:\n\n%s",
+			to.ID, to.Type, prompt)
+		a.addressTo(nil)
+	}
 	if s.busy {
 		// One turn is one run of the CLI, so this waits rather than
 		// interrupting — and goes on its own the moment the turn ends.
@@ -798,7 +971,7 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// through a list, rather than into the message. So does a number while
 		// a list is open, since the rows are numbered — but not while only the
 		// buttons show, where a bare digit is the start of a message.
-		if !isTyping(msg) || (a.controls.Open() && digit(msg) > 0) {
+		if a.controls.Wants(msg) {
 			return a, a.controlsKey(msg)
 		}
 		// Typing is a message: the row stands aside and the key goes to the
@@ -878,6 +1051,20 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+w":
 		return a, a.closeSession()
 	case "esc":
+		if a.viewing != "" {
+			// Out of the subagent and back to the conversation it came from,
+			// before esc means anything else. Nothing about the subagent is
+			// stopped by looking away from it.
+			a.viewing = ""
+			a.addressTo(nil)
+			a.resize(a.w, a.h)
+			return a, nil
+		}
+		if a.recipient != nil {
+			a.addressTo(nil)
+			a.note = "the next message goes to the agent"
+			return a, nil
+		}
 		if s := a.cur(); s != nil {
 			if a.selectedText() != "" {
 				// drop the highlight before touching the turn
@@ -904,6 +1091,17 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.wantSidebar = !a.wantSidebar
 		a.resize(a.w, a.h)
 		return a, nil
+	case "ctrl+x":
+		// The first half of the CLI's own stop-everything chord. On its own
+		// it does nothing but say what the other half would do.
+		a.chordAt = time.Now()
+		a.note = "ctrl+x — ctrl+k stops all background subagents"
+		return a, nil
+	case "ctrl+k":
+		if time.Since(a.chordAt) <= chordWindow {
+			a.chordAt = time.Time{}
+			return a, a.stopAllTasks()
+		}
 	case "ctrl+t":
 		return a, a.cycleDiff()
 	case "ctrl+f":
@@ -1050,10 +1248,14 @@ func (a *App) routeMouse(msg tea.MouseMsg) tea.Cmd {
 // bottomRows is how tall the frame's bottom strip is: the status bar,
 // or the model/permission list that replaces it while one is open.
 func (a *App) bottomRows() int {
+	rows := StatusRows(a.h)
 	if a.controls != nil && a.controls.Open() {
-		return a.controls.ListHeight()
+		rows = a.controls.ListHeight()
 	}
-	return StatusRows(a.h)
+	if s := a.cur(); s != nil {
+		rows += s.RosterHeight() + s.CompactingRows()
+	}
+	return rows
 }
 
 // dropUpHeight is how many rows the box floating over the bottom of the panes
@@ -1130,13 +1332,41 @@ func (a *App) timelinePoint(s *Session, x, y int) (line, col int) {
 // diffPoint does the same for the diff, allowing for its border and for the
 // header row inside it.
 func (a *App) diffPoint(s *Session, x, y int) (line, col int) {
-	return s.dp.YOffset() + y - 2, s.dp.BodyCol(a.diffCol(x))
+	// The body may be slid sideways, so a column on the screen is that many
+	// columns further into the line — otherwise a selection in a scrolled diff
+	// would take the text that used to be there.
+	return s.dp.YOffset() + y - 2, s.dp.BodyCol(a.diffCol(x)) + s.dp.XOff()
 }
 
 // diffCol is a screen column as a column of the pane's content, inside the
 // border.
 func (a *App) diffCol(x int) int {
 	return x - (a.lay.SidebarW + a.lay.TimelineW) - 1
+}
+
+// timelineClickable and diffClickable report whether a press here already
+// means something. A word is only selected where a click did nothing anyway:
+// a tool header, a file header, a queued message and a link are buttons, and
+// clicking a button twice quickly is a thing people do — folding a block open
+// and shut again should not turn into a text selection.
+func (a *App) timelineClickable(s *Session, line, col int) bool {
+	return s.tl.PendingAt(line) >= 0 || s.tl.HeaderBlockAt(line) >= 0 ||
+		(col >= 0 && s.tl.LinkAt(line, col) != "")
+}
+
+func (a *App) diffClickable(s *Session, x, line int) bool {
+	return s.dp.InFileList(a.diffCol(x)) || s.dp.HeaderFileAt(line) != ""
+}
+
+// secondPressAt reports whether this press is the second of a pair on the same
+// cell, which is what makes it a double-click. The clock is read directly
+// rather than through the paste heuristic's seam, the same way the sidebar's
+// rename does it.
+func (a *App) secondPressAt(x, y int) bool {
+	now := time.Now()
+	was, when := a.lastCell, a.lastPaneClick
+	a.lastCell, a.lastPaneClick = selPoint{y, x}, now
+	return was == (selPoint{y, x}) && now.Sub(when) < doubleClick
 }
 
 // dragPane is which pane a drag belongs to; a drag stays with the pane it
@@ -1163,11 +1393,21 @@ func (a *App) routeDrag(msg tea.MouseMsg) (tea.Cmd, bool) {
 		case a.inTimeline(msg.X, msg.Y):
 			a.dragging = dragTimeline
 			s.dp.ClearSelection()
-			s.tl.BeginSelect(a.timelinePoint(s, msg.X, msg.Y))
+			line, col := a.timelinePoint(s, msg.X, msg.Y)
+			a.dragWord = a.secondPressAt(msg.X, msg.Y) &&
+				!a.timelineClickable(s, line, col) && s.tl.SelectWordAt(line, col)
+			if !a.dragWord {
+				s.tl.BeginSelect(line, col)
+			}
 		case a.inDiff(msg.X, msg.Y):
 			a.dragging = dragDiff
 			s.tl.ClearSelection()
-			s.dp.BeginSelect(a.diffPoint(s, msg.X, msg.Y))
+			line, col := a.diffPoint(s, msg.X, msg.Y)
+			a.dragWord = a.secondPressAt(msg.X, msg.Y) &&
+				!a.diffClickable(s, msg.X, line) && s.dp.SelectWordAt(line, col)
+			if !a.dragWord {
+				s.dp.BeginSelect(line, col)
+			}
 		default:
 			s.tl.ClearSelection() // clicking elsewhere drops the highlight
 			s.dp.ClearSelection()
@@ -1179,6 +1419,9 @@ func (a *App) routeDrag(msg tea.MouseMsg) (tea.Cmd, bool) {
 		return nil, true
 
 	case tea.MouseActionMotion:
+		if a.dragWord {
+			return nil, a.dragging != dragNone // the word is chosen; leave it alone
+		}
 		y := min(max(msg.Y, 0), a.lay.PaneH-1)
 		switch a.dragging {
 		case dragTimeline:
@@ -1193,6 +1436,15 @@ func (a *App) routeDrag(msg tea.MouseMsg) (tea.Cmd, bool) {
 	case tea.MouseActionRelease:
 		pane := a.dragging
 		a.dragging = dragNone
+		if a.dragWord {
+			// A double-click. The highlight is already the word; the release
+			// only decides that it is worth copying, like the end of a drag.
+			a.dragWord = false
+			if text := a.selectedText(); text != "" {
+				a.copySelection(text)
+			}
+			return nil, pane != dragNone
+		}
 		switch pane {
 		case dragTimeline:
 			if a.inTimeline(msg.X, msg.Y) { // the selection ends where the button came up
@@ -1393,6 +1645,19 @@ func (a *App) handleClick(msg tea.MouseMsg) tea.Cmd {
 		}
 	}
 	// The status bar is the last row; its right edge holds the chips.
+	// A roster row is the last thing on the screen; clicking one puts the
+	// walk on it, the same as ↓ would.
+	if s := a.cur(); s != nil && s.RosterHeight() > 0 {
+		if i := msg.Y - (a.h - s.RosterHeight()); i >= 0 {
+			if a.controls == nil {
+				a.openControls()
+			}
+			if a.controls != nil && a.controls.SelectRosterRow(i) {
+				a.resize(a.w, a.h)
+				return nil
+			}
+		}
+	}
 	// The values ↓ walks between are drawn in the status bar, so that is
 	// where they are clicked. Asked for before the chips, which sit further
 	// right on the same row and cannot overlap them.
@@ -1501,6 +1766,33 @@ func (a *App) clickSidebar(x, y int) tea.Cmd {
 	return nil
 }
 
+// shownTimeline is whichever conversation is in the pane: the agent's own, or
+// a subagent's while one is open. Everything that reads or scrolls the pane
+// goes through here, so opening a subagent moves the whole pane and not just
+// what is drawn in it.
+func (a *App) shownTimeline(s *Session) *Timeline {
+	if a.viewing != "" {
+		if v := s.subs[a.viewing]; v != nil {
+			return v.tl
+		}
+	}
+	return s.tl
+}
+
+// subagentOpen reports whether a subagent's transcript has the pane. It also
+// closes one whose task the session has forgotten — a cleared agent, a
+// restored one — rather than leaving the pane pointed at nothing.
+func (a *App) subagentOpen(s *Session) bool {
+	if a.viewing == "" {
+		return false
+	}
+	if s == nil || s.task(a.viewing) == nil {
+		a.viewing = ""
+		return false
+	}
+	return true
+}
+
 func (a *App) routeToFocus(msg tea.Msg) tea.Cmd {
 	s := a.cur()
 	if s == nil {
@@ -1508,7 +1800,7 @@ func (a *App) routeToFocus(msg tea.Msg) tea.Cmd {
 	}
 	switch a.focus {
 	case focusTimeline:
-		return s.tl.Update(msg)
+		return a.shownTimeline(s).Update(msg)
 	case focusDiff:
 		return s.dp.Update(msg)
 	default:
@@ -1609,7 +1901,18 @@ func (a *App) View() string {
 			x.tl.SetPending(x.Queued())
 		}
 		if !a.lay.FullDiff {
-			panes = append(panes, s.tl.View())
+			if a.subagentOpen(s) {
+				// A header row saying whose conversation this is, and the
+				// conversation. A subagent whose file has not appeared yet
+				// says so rather than showing an empty pane.
+				body := a.shownTimeline(s).View()
+				if v := s.subs[a.viewing]; v == nil || v.log == nil {
+					body = RenderSystem(waitingForTranscript(a.viewing), a.lay.TimelineW)
+				}
+				panes = append(panes, s.subHeader(a.viewing, a.lay.TimelineW)+"\n"+body)
+			} else {
+				panes = append(panes, s.tl.View())
+			}
 		}
 		if a.lay.ShowDiff {
 			c := T.Muted
@@ -1631,6 +1934,14 @@ func (a *App) View() string {
 	bottom := a.statusLine()
 	if a.controls != nil && a.controls.Open() {
 		bottom = a.controls.ListView(a.w)
+	}
+	if s := a.cur(); s != nil {
+		if bar := s.compactingRow(a.w); bar != "" {
+			bottom += "\n" + bar
+		}
+		if roster := s.rosterView(a.w, a.rosterPick()); roster != "" {
+			bottom += "\n" + roster
+		}
 	}
 	return fitFrame(strings.Join([]string{main, a.in.View(), bottom}, "\n"), a.h)
 }
@@ -1672,28 +1983,63 @@ func (a *App) statusData() StatusData {
 		Adds: s.diff.Additions, Dels: s.diff.Deletions, Note: a.note,
 		Branch: s.diff.Branch, Untracked: s.diff.Untracked, PR: s.pr,
 		Model:         s.Model,
+		Effort:        effortStatus(s),
+		EffortSet:     s.Effort != agent.DefaultEffort,
 		ContextTokens: s.ctxTokens, ContextWindow: s.ctxWindow, Limits: s.limits,
 	}
 	d.Shells, d.Agents = s.Background()
 	if a.controls != nil {
 		d.Picking, d.Pick = true, a.controls.Kind()
 	}
+	if a.recipient != nil {
+		d.Note = "next message → " + a.recipient.Type + " · esc to talk to the agent instead"
+	}
 	if n := len(a.sessions); n > 1 {
-		running := 0
-		for _, x := range a.sessions {
-			if x.busy {
-				running++
-			}
-		}
 		d.Agent = fmt.Sprintf("%s [%d/%d]", d.Agent, a.active+1, n)
-		if running > 0 && a.note == "" {
-			d.Note = fmt.Sprintf("%d running", running)
-		}
 	}
 	if s.busy {
 		d.ElapsedSec = s.Elapsed().Seconds()
 	}
 	return d
+}
+
+// effortStatus is what the hub calls this agent's effort, empty for a backend
+// that has no such setting — there is no point offering a dial that turns
+// nothing.
+func effortStatus(s *Session) string {
+	if len(s.efforts()) <= 1 {
+		return ""
+	}
+	return effortLabel(s.Effort)
+}
+
+// addressTo makes the next message for one subagent, or for nobody in
+// particular again. The input's placeholder says who, so the box itself
+// reads "to general-purpose…" rather than relying on a note being noticed.
+func (a *App) addressTo(t *agent.TaskUpdate) {
+	if a.holdText == "" {
+		a.holdText = a.in.ta.Placeholder
+	}
+	a.recipient = t
+	if t == nil {
+		a.in.ta.Placeholder = a.holdText
+		return
+	}
+	a.in.ta.Placeholder = "to " + t.Type + " (" + t.ID + ")…  enter send · esc to talk to the agent instead"
+}
+
+// rosterPick is which roster row the walk is on, for the highlight.
+func (a *App) rosterPick() rosterPick {
+	if a.controls == nil {
+		return rosterPick{}
+	}
+	switch a.controls.Kind() {
+	case controlMain:
+		return rosterPick{main: true}
+	case controlAgent:
+		return rosterPick{task: a.controls.Task()}
+	}
+	return rosterPick{}
 }
 
 // finishTurn is everything that happens when a turn is over, wherever the
@@ -1714,12 +2060,6 @@ func (a *App) finishTurn(s *Session) []tea.Cmd {
 	}
 	a.persist()
 	cmds := []tea.Cmd{s.collectDiff()}
-	// Grown too big to keep paying for? Fold it up before anything else
-	// happens — a queued message is cheaper to send into the folded
-	// conversation, and it is still sent, after the summarising turn.
-	if cmd := a.maybeAutoCompact(s); cmd != nil {
-		return append(cmds, cmd)
-	}
 	// Whatever was typed while this turn ran goes now. Only then is there any
 	// point offering the agent's own question — a queued message is already
 	// the answer to it.

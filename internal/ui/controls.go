@@ -16,13 +16,24 @@ import (
 type controlKind int
 
 const (
-	controlModel controlKind = iota
+	// controlMain and controlAgent are the roster's rows — the agent itself
+	// and each subagent — when few enough are running to be listed. Enter on
+	// a subagent addresses the next message to it; x stops it.
+	controlMain controlKind = iota
+	controlAgent
+	controlModel
 	controlPermission
-	// controlBackground is the work running behind the turn: the shells the
-	// agent backgrounded and the subagents it handed work to. It is only on
-	// the row while there is any, since a button for nothing is a button in
-	// the way.
+	// controlEffort is how hard the backend is asked to think. Offered only by
+	// a backend that has the setting, and it is the one value here that cannot
+	// be changed under a live process — see Session.SetEffort.
+	controlEffort
+	// controlBackground is the counts alone — "6 agents · 2 shells" — for
+	// when too much is running to list, and the walk's one stop for it: enter
+	// opens the list, where enter views a task and x stops it.
 	controlBackground
+	// controlStop is not a button but an answer: the walk asked for a task to
+	// be stopped.
+	controlStop
 )
 
 // controlOption is one value a chip can take.
@@ -31,16 +42,18 @@ type controlOption struct {
 	label, desc string
 	perm        agent.PermissionMode
 	model       string
+	effort      string
 	task        string // controlBackground: the CLI's own task id
 	on          bool
 }
 
 // controlChip is one button: what it sets, what it is set to, and what else it
-// could be set to.
+// could be set to. A roster row is a chip too, with a task and no options.
 type controlChip struct {
 	kind    controlKind
 	label   string
 	value   string
+	task    string // controlAgent: the CLI's id for the subagent
 	options []controlOption
 	// col and width are where the chip was drawn, so a click can find it.
 	col, width int
@@ -83,18 +96,55 @@ func NewControls(s *Session) *Controls {
 		})
 	}
 
-	c.chips = []controlChip{model, perm}
-	if bg, ok := backgroundChip(s); ok {
+	// Effort is only on the row when the backend has such a setting, so a
+	// Codex or mock agent is not offered a dial it does not have.
+	var effortChip *controlChip
+	if levels := s.efforts(); len(levels) > 1 {
+		chip := controlChip{kind: controlEffort, label: "effort", value: effortLabel(s.Effort)}
+		describer, _ := s.Backend.(agent.EffortChooser)
+		for _, e := range levels {
+			desc := ""
+			if describer != nil {
+				desc = describer.DescribeEffort(e)
+			}
+			chip.options = append(chip.options, controlOption{
+				kind: controlEffort, label: effortLabel(e), desc: desc,
+				effort: e, on: e == s.Effort,
+			})
+		}
+		effortChip = &chip
+	}
+
+	// The hub's own two values come first, always in the same two places:
+	// they are what the walk is mostly for, and they are there whether
+	// anything is running or not. A row that moves depending on what a
+	// subagent happens to be doing is a row you have to look for.
+	c.chips = append(c.chips, model, perm)
+	if effortChip != nil {
+		c.chips = append(c.chips, *effortChip)
+	}
+	// Then the running work, in the two cases the CLI has. Few enough to
+	// list: a stop for each of the roster's rows, in the order they are
+	// drawn. Too many: the counts are one stop, and enter opens the list.
+	if s.rosterShown() {
+		for _, r := range s.roster() {
+			kind := controlAgent
+			if r.main {
+				kind = controlMain
+			}
+			c.chips = append(c.chips, controlChip{kind: kind, label: r.name, value: r.what, task: r.task})
+		}
+	} else if bg, ok := backgroundChip(s); ok {
 		c.chips = append(c.chips, bg)
 	}
 	c.layout()
 	return c
 }
 
-// backgroundChip is the button for what is running behind the turn. Picking
-// a row shows that task's own output, which is the only thing crema can
-// honestly offer: the CLI has no way to be told to stop one of them, so this
-// does not pretend to.
+// backgroundChip is the button for what is running behind the turn, for the
+// case where there is too much of it to list. Picking a row shows that task's
+// own output; x on a row stops it, which the CLI's stdin protocol turned out
+// to support (stop_task) after all.
 func backgroundChip(s *Session) (controlChip, bool) {
 	shells, agents := s.Background()
 	if shells+agents == 0 {
@@ -143,6 +193,16 @@ func (c *Controls) chipText(i int) string {
 	return " " + c.chips[i].label + "  " + c.chips[i].value + " "
 }
 
+// effortLabel is what an effort level is called on the row. The CLI's own
+// default has no name of its own, so it borrows the word every other value
+// here uses for the same idea.
+func effortLabel(e string) string {
+	if e == agent.DefaultEffort {
+		return "default"
+	}
+	return e
+}
+
 func modelLabel(m string) string {
 	if m == agent.DefaultModel {
 		return "default"
@@ -153,6 +213,28 @@ func modelLabel(m string) string {
 // Open reports whether a list is showing, which is what decides who owns the
 // arrow keys.
 func (c *Controls) Open() bool { return c.open }
+
+// Wants reports whether a key is the walk's to handle rather than the
+// draft's. Movement and enter always are. A digit is, while a numbered list
+// is open — but not while only the highlight shows, where a bare digit is the
+// start of a message. And x is, when it means stop: on a subagent's row, or
+// in the background list. Everything else is typing, and typing ends the
+// walk and goes into the box.
+func (c *Controls) Wants(msg tea.KeyMsg) bool {
+	if !isTyping(msg) {
+		return true
+	}
+	if c.open && digit(msg) > 0 {
+		return true
+	}
+	if msg.String() == "x" {
+		if c.idx >= 0 && c.idx < len(c.chips) {
+			kind := c.chips[c.idx].kind
+			return kind == controlAgent || (c.open && kind == controlBackground)
+		}
+	}
+	return false
+}
 
 // Update handles a key. chosen is a value to apply; closed means the row is
 // done and the input should have the focus back.
@@ -180,9 +262,21 @@ func (c *Controls) Update(msg tea.KeyMsg) (chosen *controlOption, closed bool) {
 		// running — and dropping back into the input box would send the next
 		// keystroke somewhere the eye is not.
 	case "enter", " ":
+		switch chip := c.chips[c.idx]; chip.kind {
+		case controlMain:
+			// Talking to the agent itself is just typing. Back to the box.
+			return nil, true
+		case controlAgent:
+			// Talk to it: the next message goes to this subagent.
+			return &controlOption{kind: controlAgent, task: chip.task, label: chip.label}, false
+		}
 		// Only enter opens one, so walking past a value costs one key and
 		// nothing opens by accident on the way through.
 		c.openList()
+	case "x":
+		if chip := c.chips[c.idx]; chip.kind == controlAgent {
+			return &controlOption{kind: controlStop, task: chip.task, label: chip.label}, false
+		}
 	}
 	return nil, false
 }
@@ -208,6 +302,12 @@ func (c *Controls) listKey(msg tea.KeyMsg) (*controlOption, bool) {
 		c.openList()
 	case "enter", " ":
 		return c.pick(c.opt), false
+	case "x":
+		// In the background list, x stops the highlighted task.
+		if c.chips[c.idx].kind == controlBackground && c.opt < len(opts) {
+			o := opts[c.opt]
+			return &controlOption{kind: controlStop, task: o.task, label: o.label}, false
+		}
 	default:
 		// The rows are numbered, so a number picks one — the way the CLIs' own
 		// pickers work, and quicker than arrowing down to the fifth.
@@ -283,6 +383,44 @@ func (c *Controls) Kind() controlKind {
 	return c.chips[c.idx].kind
 }
 
+// Task is the subagent the walk is on, "" when it is on something else.
+func (c *Controls) Task() string {
+	if c.idx < 0 || c.idx >= len(c.chips) {
+		return ""
+	}
+	return c.chips[c.idx].task
+}
+
+// SelectRosterRow points the walk at one of the roster's rows by position —
+// what a click on that row means. The rows are the chips after the hub's own
+// values, in the order they are drawn, so the offset is where they start
+// rather than zero.
+func (c *Controls) SelectRosterRow(i int) bool {
+	if i < 0 {
+		return false
+	}
+	return c.SelectIndex(c.rosterFrom() + i)
+}
+
+// rosterFrom is the index of the first roster row among the chips.
+func (c *Controls) rosterFrom() int {
+	for i, chip := range c.chips {
+		if chip.kind == controlMain || chip.kind == controlAgent {
+			return i
+		}
+	}
+	return len(c.chips)
+}
+
+// SelectIndex points the walk at one chip by position.
+func (c *Controls) SelectIndex(i int) bool {
+	if i < 0 || i >= len(c.chips) {
+		return false
+	}
+	c.idx, c.open = i, false
+	return true
+}
+
 // SelectKind points the row at one particular button and opens it — what a
 // click on that value in the status bar means.
 func (c *Controls) SelectKind(kind controlKind) bool {
@@ -332,7 +470,7 @@ func (c *Controls) ListView(w int) string {
 	}
 	verb := "enter apply"
 	if chip.kind == controlBackground {
-		verb = "enter view" // looking at background work does not change it
+		verb = "enter view · x stop"
 	}
 	hint := "↑↓ move · 1-" + itoa(len(rows)) + " pick · " + verb + " · esc back"
 	out = append(out, fg(T.Muted).Width(max(1, w)).Render(" "+hint))

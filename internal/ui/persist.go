@@ -33,11 +33,11 @@ type SavedSession struct {
 	ContextTokens int64                `json:"context_tokens,omitempty"`
 	ContextWindow int64                `json:"context_window,omitempty"`
 	Permission    agent.PermissionMode `json:"permission,omitempty"`
-	// NoAutoCompact is stored the wrong way round on purpose: the default is
-	// on, and an agent saved before this existed should come back on.
-	NoAutoCompact bool   `json:"no_autocompact,omitempty"`
-	Model         string `json:"model,omitempty"`
-	Name          string `json:"name,omitempty"`
+	Model         string               `json:"model,omitempty"`
+	// Effort is how hard this agent is asked to think. Empty — including in a
+	// state file written before the setting existed — is the CLI's own default.
+	Effort string `json:"effort,omitempty"`
+	Name   string `json:"name,omitempty"`
 	// History is what you typed at this agent, for ↑ in the input box. Saved
 	// apart from the conversation because it outlives it: /clear drops what
 	// the agent knows, not what you asked.
@@ -131,8 +131,8 @@ func (a *App) StateSnapshot() State {
 			ContextTokens: s.ctxTokens,
 			ContextWindow: s.ctxWindow,
 			Permission:    s.Permission,
-			NoAutoCompact: !s.AutoCompact,
 			Model:         s.Model,
+			Effort:        s.Effort,
 			Name:          s.Name,
 			History:       s.history,
 			CLICommands:   s.cliCmds,
@@ -191,8 +191,10 @@ func (a *App) RestoreSessions(st State) (int, []string) {
 		s.agentSID = ss.AgentSID
 		s.cost = ss.Cost
 		s.Model = ss.Model
+		if backendOffersEffort(backend, ss.Effort) {
+			s.Effort = ss.Effort
+		}
 		s.Name = ss.Name
-		s.AutoCompact = !ss.NoAutoCompact
 		s.history = ss.History
 		s.cliCmds = ss.CLICommands
 		if ss.AgentSID != "" {
@@ -210,6 +212,25 @@ func (a *App) RestoreSessions(st State) (int, []string) {
 		a.active = st.Active
 	}
 	return len(a.sessions), skipped
+}
+
+// backendOffersEffort keeps a saved level from being handed to a backend that
+// has no such setting, or that has stopped offering that level — the same
+// guard the permission mode gets, for the same reason.
+func backendOffersEffort(backend agent.Agent, level string) bool {
+	if level == agent.DefaultEffort {
+		return false
+	}
+	e, ok := backend.(agent.EffortChooser)
+	if !ok {
+		return false
+	}
+	for _, l := range e.Efforts() {
+		if l == level {
+			return true
+		}
+	}
+	return false
 }
 
 func resumedNote(ss SavedSession, savedAt time.Time) string {

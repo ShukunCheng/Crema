@@ -56,6 +56,7 @@ type claudeConv struct {
 
 	mu     sync.Mutex
 	closed bool
+	reqN   int // control requests sent, for their ids
 }
 
 // Open starts a conversation process. It carries the same flags a single-turn
@@ -73,6 +74,12 @@ func (c *Claude) Open(ctx context.Context, opts RunOptions) (Conversation, error
 	}
 	if opts.Model != DefaultModel && opts.Model != "" {
 		args = append(args, "--model", opts.Model)
+	}
+	// Effort has no control request — measured against the CLI's own bundle,
+	// which offers set_model and set_permission_mode but nothing for this — so
+	// it can only travel on the command line, and changing it costs a process.
+	if opts.Effort != DefaultEffort {
+		args = append(args, "--effort", opts.Effort)
 	}
 	if opts.SessionID != "" {
 		args = append(args, "--resume", opts.SessionID)

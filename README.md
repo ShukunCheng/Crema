@@ -45,7 +45,8 @@ the interface without spending anything.
 | `shift+enter` / `ctrl+enter` / `alt+enter` / `ctrl+j` | newline — the box grows with the draft, up to six rows |
 | paste | multi-line text lands whole; its newlines don't send |
 | `ctrl+v` | paste — a copied **image** attaches as `[Image #1]` |
-| `ctrl+backspace` | delete the word before the cursor |
+| `ctrl+backspace` | delete the word before the cursor. A word ends at punctuation, not only at a space, so on `fix/1234-order-workspace-issue` it takes `issue` rather than the whole branch name |
+| `ctrl+←` / `ctrl+→` | move the cursor a word at a time, by that same rule — so walking through a branch name stops at every part of it, and what `ctrl+←` walks past is exactly what `ctrl+backspace` would take. `alt+←` / `alt+→` and `alt+b` / `alt+f` do the same |
 | `/` (at the start of the input) | list the agent's slash commands and skills |
 | `@` (anywhere in the input) | list the project's files |
 | `↑↓` (with either list open) | move through the matches |
@@ -57,15 +58,20 @@ the interface without spending anything.
 | `alt+1` … `alt+9` | jump straight to that agent |
 | `ctrl+b` | show/hide the agent sidebar |
 | `↑` (from the input) | walk back through what you have asked this agent; `↓` scrolls forward again — a multi-line entry doesn't interrupt the walk, and typing anything ends it |
-| `↓` (at the end of the history) | step into the status bar's settings: model, then permissions, then background work if any. `↑` walks back and off the front returns to the input; `enter` opens the highlighted one |
+| `↓` (at the end of the history) | step into the hub: the model first, then the permission mode, then the effort, then what is running — the agent's own row, then each subagent. `↑` walks back and off the front returns to the input; `enter` opens a value, opens a subagent's own conversation, or with the crowd case opens the list; `x` stops a task |
+| `esc` (in a subagent's conversation) | back to the agent's own; nothing is stopped |
+| `ctrl+x` `ctrl+k` | stop every background subagent of the focused agent — asked for twice within three seconds, like the CLI |
 | `ctrl+p` | the same buttons, from anywhere |
 | drag in the conversation or the diff | select text; copies to the clipboard on release, and `ctrl+c` copies it again |
+| `shift` + wheel over the diff | scroll it sideways. A terminal that reports a sideways wheel of its own needs no `shift` |
+| double-click in the conversation or the diff | select the word under the pointer, and copy it. A word ends at punctuation, so double-clicking `app` in `internal/ui/app.go` gives `app` — the same rule `ctrl+backspace` uses in the input box. On a tool or file header the second click still folds it back, because a header is a button |
 | `ctrl+t` | cycle the diff: hidden → beside the conversation → full screen (or click the buttons on its header) |
 | `ctrl+f` | find in the diff (`/` too, when the diff has the focus) — shows it if it was hidden |
 | `ctrl+l` | switch between light and dark |
 | `ctrl+r` | refresh the diff and the command list now |
 | `ctrl+o` | move focus: input → timeline → diff |
 | `pgup` / `pgdn` / `home` / `end` | scroll the focused pane |
+| `←` / `→` (with the diff focused) | slide the diff sideways — a diff line is as wide as the code is, and the pane is a column. `home` comes back to the left as well as the top |
 | `ctrl+c` | copy the selected text |
 | `ctrl+q` | quit |
 
@@ -97,7 +103,7 @@ the agent not answering.
 Panes drop away as the terminal narrows so crema stays usable at 80×24: the diff
 pane needs 124 columns, the sidebar needs 70. Above those floors `ctrl+t` and
 `ctrl+b` decide. When the sidebar is hidden, the status bar still shows which
-agent you're on and how many are running, e.g. `Claude Code [2/3] · 1 running`.
+agent you're on, e.g. `Claude Code [2/3]`.
 
 ## Mouse
 
@@ -117,12 +123,15 @@ The whole interface is clickable:
 | a row in the picker or in a completion list | choose it |
 | a message waiting in the queue | take it back into the input box |
 | the model, permission mode or background count in the status bar | open that value's list |
+| a row of the running work under the status bar | put the walk on it — `enter` then talks to it, `x` stops it |
 | any pane | focus it (so `pgup`/`pgdn` go there) |
 | a URL in the conversation | open it in the browser — links render underlined; a drag across one still selects |
 | a tool block's header line | fold or unfold that block |
+| `shift` + wheel over the diff | scroll it sideways |
 | a file's header line in the diff | fold or unfold that file |
 | a file in the full-screen list | show that file's diff |
 | drag in the conversation or the diff | select text, copied on release (see below) |
+| double-click in the conversation or the diff | select the word under the pointer and copy it |
 | scroll wheel | scrolls whichever pane is under the pointer, focused or not |
 
 An open block shows `▾ Bash` and the whole thing under it. What arrives folded:
@@ -165,18 +174,99 @@ edits and failures arrive open, because a turn is judged by what it changed,
 whoever in it did the changing. A subagent's run never merges with the main
 turn's: the summary line says whose work it stands for.
 
+**While work is in flight it gets rows of its own**, under the status bar:
+the agent itself and each subagent it handed something to, with what each is
+on now, how long it has been at it, and what it has written.
+
+```
+ ● main                     Edit                                        1m 35s · ↓ 3.4k
+ ○ general-purpose          Grep: Locating orderContextMenu render      6m 51s · ↓ 17k
+ ○ structural-completeness› Diffing PlanboardViewSwitch.test.tsx        6m 41s · ↓ 15k
+```
+
+The rows are only there while something is running — an idle agent gets its
+screen back, and the conversation gets the rows back. More than five running and the
+rows give way to the counts in the hub (the second case, below), and when the turn itself has
+finished the main row says it is waiting on the background work rather than
+showing a clock for something it is not doing. A subagent of a subagent is
+indented under it, from the `spawn_depth` the CLI puts on the `task_started`
+line, so the rows read as the tree the CLI's own panel draws.
+
+A subagent that **succeeded** leaves the roster the instant it does: its
+answer has already arrived in the conversation. One that **failed or was
+stopped** is held for thirty seconds and its row says which — `⨯` and the
+status in place of what it was doing — because otherwise the row and the only
+mention of the failure disappear in the same frame.
+
 The status bar counts it too — `2 shells · 1 agent (↓ to see)` on the mode
-row, the way the CLI'''s own status line does, with shells counted apart from
-subagents because they are different things to go and look at. `↓` (or
-`ctrl+p`) puts a **background** button on the row beside model and
-permissions, and opening it lists what is running: what each was asked, what
-tool it is on now, and its spend so far. Picking one prints that task'''s own
-output into the conversation. It only ever shows — the CLI has no way to be
-told to stop one, so crema does not offer a key that would lie.
+row, the way the CLI's own status line does, with shells counted apart from
+subagents because they are different things to go and look at.
+
+**The walk always starts in the same place.** `↓` from the input reaches the
+model, then the permission mode, then the effort, and only then the running
+work. Those two
+settings are what the walk is mostly for and they are there whether anything
+is running or not, so they keep their two positions; putting the roster first
+meant the number of presses to reach the model depended on how many subagents
+happened to be going at that moment.
+
+**Two cases, the CLI's two.** Up to five things running, each gets a row and
+the walk continues onto them after the settings — the agent's own row first,
+then each subagent. `x` on a row **stops** that task, and `ctrl+x` `ctrl+k`
+stops all of them, asked for twice within three seconds the way the CLI asks.
+More than five running, the rows would eat the pane, so the hub shows the
+counts alone and the walk gets one **background** stop for all of it: `enter`
+opens the list, where `enter` prints a task's own output into the conversation
+and `x` stops it.
+
+**`enter` on a subagent's row opens that subagent's own conversation**, which
+is what `enter` does on the CLI's subagent panel. The pane becomes its
+transcript — the prompt it was handed at the top, then its thinking, the
+tools it ran and their output, and its answer — with a header saying whose it
+is and `esc` to go back. It is live: while the subagent works, the pane grows
+as it writes. `esc` returns to the agent's own conversation and stops
+nothing.
+
+Crema reads that from the same place the CLI does. Every subagent writes its
+own transcript to
+`~/.claude/projects/<project>/<session id>/subagents/agent-<task id>.jsonl`,
+beside an `agent-<task id>.meta.json` naming the agent type and what it was
+asked; both halves of that path are things crema already holds, since the
+`task_id` and `session_id` arrive together on the `task_started` line and the
+`task_id` **is** the filename. Verified against 417 of these on this machine
+and against crema's own recorded captures. The file is polled twice a second
+while a subagent runs and only the bytes since the last look are read, so a
+line the CLI is halfway through writing waits rather than arriving mangled;
+the polling stops when nothing is running, so an idle crema is back to its
+ten-second heartbeat.
+
+What that replaced is the point. Until now the only way to see inside a
+subagent was to ask the main agent about it, which spends a whole turn of the
+most expensive conversation on the machine and only works if the model
+chooses to answer. Talking to one still works that way, because crema cannot
+reach a subagent's stdin — the CLI has no such door — so `enter` also
+addresses the next message to that subagent and it goes to the main agent
+with the ask to relay it by `SendMessage`, the CLI's own way of talking to
+one, with `→ general-purpose: …` in the transcript so it is plain who it was
+for. But *reading* one costs nothing now, and arrives while the work is
+happening rather than after it.
+
+Stopping is real. The CLI's stream-json stdin takes control requests —
+measured from its bundle (2.1.259): `interrupt`, `set_model`,
+`set_permission_mode`, `stop_task` among others — and `stop_task` was tried
+live: the CLI answers ok and the task stops. It then says nothing more about
+that task, so the ok reply is what marks it stopped in crema rather than a
+word that never comes. The CLI's own list of background work
+(`background_tasks_changed`) is taken as the truth about the rest: a
+backgrounded task it no longer lists has ended, however it ended, while a
+foreground subagent — never on that list — is left to its own lifecycle
+lines.
 
 While background work runs, the working line counts it — `… · 2 background
 tasks · esc to cancel` — and the sidebar carries the same count as `+2` on
-that agent's row, because the sidebar is the only place every agent is
+that agent's row — which stops reading `idle` while its subagents work, since
+an agent waiting on one is not idle whatever its own turn is doing — because
+the sidebar is the only place every agent is
 visible at once: an agent whose subagent is grinding away should not look
 like one thinking by itself. A task belongs to the run that launched it, so
 if the CLI exits without ever saying how one ended, it stops being counted
@@ -258,6 +348,31 @@ The shape of the diff follows the room it has:
 | beside the conversation | **unified**, the way a pull request reads: one column, `+`/`−` prefixes, files folded until you click one |
 | full screen | a **browser**: the changed files down the left, the one you picked beside them |
 
+**Long lines slide rather than being cut.** A diff line is as wide as the code
+is and the pane is a column beside the conversation, so the end of a line —
+where the call arguments, the string literal and the comment are — used to be
+cut off and marked with a `›`. Now the body scrolls sideways: `shift` and the
+wheel, or `←` / `→` with the diff focused, and `home` comes back to the left
+as well as the top. A bar under the body shows how much of the width is on
+screen and where, and names the columns exactly, because in a diff the column
+is often the thing you are counting:
+
+```
+────▌▌▌▌▌▌▌▌────────────────  41-100 of 214
+```
+
+The bar is only there when there is somewhere to go, and it takes its row from
+the diff rather than from the frame. Rows are drawn at the content's own width
+and a window is cut out of them, which is what lets a selection in a scrolled
+diff take the text under the pointer rather than the text that used to be
+there. One pathological line — a minified bundle, a base64 blob — is bounded
+at 2000 columns, since every row is padded to the widest one.
+
+It is the stacked unified view that slides. Full screen puts a divider down
+the middle at a position the pane's width decides, and sliding the rendered
+rows under it would take the divider with them; there both halves are already
+sized to the frame.
+
 ### Full screen
 
 ```
@@ -327,7 +442,7 @@ sketched here with `█` and `░` because a README has no colour:
 ```
  ● Claude Code [1/2] │ [opus] │ D:\Crema git:(main* +43 −61 ?8) │ 12.5s │ $0.4231
  Context ██░░░░░░░░ 21% │ 5h █░░░░░░░░░ 13% (resets in 1h 51m) │ 7d ███░░░░░░░ 27% (resets in 3d 5h)
- ▸▸ full access (ctrl+p to change) · 1 running                   [◨ side][ dark  ]
+ ▸▸ full access (ctrl+p to change)                              [◨ side][ dark  ]
 ```
 
 **Who and where.** The focused agent (with `[1/2]` when several are open), its
@@ -593,25 +708,110 @@ uses — so the context is put down once per agent instead of once per message.
 Measured live on a three-turn conversation: the second turn rewrote **81
 tokens** against 26,334 read, where the first had to establish all of it.
 
-The process is the agent's, and it is let go whenever holding it would be
-wrong: cancelling a turn (the CLI has no stdin word for "stop"), changing the
-model or permissions (both are command-line flags), `/clear`, `/resume`,
-closing the agent, and sitting idle for longer than the prompt cache it
-exists to keep warm. None of those lose the conversation — the CLI keeps the
-transcript, and the next message resumes it by id. A backend without the mode
-(Codex, the mock) is still driven a process per turn, where the exit is what
-ends a turn rather than the result line.
+The process is the agent's, and cancelling a turn or changing its model or
+permission mode no longer costs it: those go down the process's own stdin as
+control requests (`interrupt`, `set_model`, `set_permission_mode` — tried
+live, each answered ok, an interrupted turn ending 0.9s after the ask), so
+the conversation's cache lives on. It is let go only when holding it would be
+wrong: `/clear`, `/resume`, closing the agent, sitting idle for longer than
+the prompt cache it exists to keep warm, or the CLI refusing a live switch —
+in which case the next message starts a fresh process with the setting on its
+command line, and the note says so, because that turn is a cold start. None
+of those lose the conversation — the CLI keeps the transcript, and the next
+message resumes it by id. A backend without the mode (Codex, the mock) is
+still driven a process per turn, where the exit is what ends a turn rather
+than the result line.
 
-**Conversations fold themselves up.** With the caching fixed, what is left is
-size, and size is paid on every turn: measured across this machine's agents,
-the median conversation was 714k tokens by the time a turn started and the
-largest 988k of a 1M window. Every turn re-reads all of that, and every
-process opened cold rewrites it. The CLI'''s interactive sessions compact
-themselves before that happens; a headless run never does, because nobody is
-there to be asked. So crema does it, at 80% of the window, by the same means
-as `/compact`: summarise, start again with the summary in front of the next
-message. It says so in the transcript when it happens, and `/autocompact off`
-turns it off for that agent.
+**Size is the rest of the bill, and folding it up is yours to ask for.** With
+the caching fixed, what is left is how big the conversation has grown.
+Measured over the 11,163 API calls this machine's agents have made through
+crema, **47% of the spend was cache reads and 45% cache writes**: 92% of what
+crema costs is the conversation being carried from one turn to the next.
+Output was 7%.
+
+Both halves scale with the conversation, and so does the price of a single
+call:
+
+| conversation size | cost of one call |
+|---|---|
+| under 100k | $0.13 |
+| 200k – 300k | $0.26 |
+| 400k – 600k | $0.61 |
+| over 800k | $0.70 |
+
+The same turn costs five times as much in a full window as in a fresh one,
+and nothing about it is five times better. Two thirds of the write bill came
+from 388 calls that rewrote more than 100k tokens each — the CLI re-anchoring
+its cache mid-conversation, at 81% of the whole conversation a time. Those
+are not avoidable, but they are charged by the token like everything else, so
+halving the conversation halves them too.
+
+**Crema does not fold a conversation up on its own.** It used to: a token
+budget that fired the moment a turn ended. It was removed because on a real
+machine it fires far more often than the arithmetic suggests. The reason is
+the floor. Measured over 49 real crema sessions here, the very first API call
+of a conversation already reads a median of **66,577 tokens** — the system
+prompt, the tool schemas, `CLAUDE.md`, the memory index, the skills listing —
+before a word has been typed, and p90 is 73k. A budget counted from zero
+therefore buys a third less conversation than it says, and the fold hands
+that 66k straight back the instant it finishes. At a 200k trigger that worked
+out to a fold every **35 API calls** — ten or fifteen turns of real work —
+each one costing a turn and a chunk of what the agent knew. The saving is
+real and so is the interruption, and which of them matters is a judgement
+about the work in front of you, not one crema can make from a token count.
+
+So `/compact` is a thing you ask for, when the conversation has got long
+enough that you can feel it. `/cost` says how big it is and what it has spent
+so far, and the status bar carries the context percentage, so the moment is
+visible rather than guessed at. The CLI's own `/autocompact` still passes
+through to the CLI, which has server-side compaction of its own and triggers
+it at 150k.
+
+**Effort is the lever on the other half.** Caching is about what the agent
+reads; effort is about what it writes, and nothing about caching touches an
+output token. Measured over this machine's own calls, output is **8.6%** of
+what a turn costs on Opus 5 and **25%** on Fable 5.1 — where thinking is
+always on, cannot be switched off, and is invisible by default, so you pay for
+reasoning you never see. Fable 5.1 writes **2.2× the output tokens per session**
+that Opus 5 does at the same number of steps, at twice the price per token.
+
+So `↓` reaches an **effort** dial beside the model and the permission mode,
+and `/effort low|medium|high|xhigh|max` sets it. The CLI's own `--effort` is
+where it goes; there is no control request for it — measured against the CLI's
+bundle, which offers `set_model` and `set_permission_mode` over stdin and
+nothing for this — so changing it costs a new process and one re-read of the
+conversation. Crema says so in the transcript rather than leaving it to be
+found in the bill. `high` is the CLI's default; `low` is for subagents and
+mechanical work, `xhigh` for coding and long agentic runs, `max` for when
+being right matters more than what it costs. A backend without the setting is
+never offered the dial.
+
+The one thing that is *not* worth doing is pinning the cache lifetime.
+`ENABLE_PROMPT_CACHING_1H=1` is still set, and it is still a no-op: every
+cache write on this account is already filed as `ephemeral_1h`, in
+interactive sessions that never see the variable as much as in crema's. The
+1-hour entry costs 2x input to write where a 5-minute one costs 1.25x, which
+across the sample was a $899 premium — but 94% of calls follow the one before
+them by less than a minute and only 1.9% by more than five, so a 5-minute TTL
+would have had to rewrite $375 of prefix it currently reads. The premium is
+real, the saving is smaller than it, and neither is crema's to choose.
+
+What is on screen stays on screen. The transcript is crema's, not the
+agent's: folding the agent's conversation leaves one grey line where it
+happened — `▸ compacted · the agent carries on from a summary of everything
+above`, the summary itself a click away — and the conversation above it, including the
+answer you were just reading, is still there. An earlier version cleared the
+pane and showed the summary in its place, which took the answer to your last
+message away before you had read it. A message typed during the summarising
+turn is kept too, and sent into the folded conversation.
+
+While it runs, a line at the bottom says so — `▸▸ Compacting conversation`
+with the size being folded up, how long it has taken, and what has been
+written so far. The bar beside it sweeps rather than fills: nothing reports
+progress through a compaction (the CLI knows the size before and after, and
+the second only once it is done), so a bar that crept along would be a guess
+dressed up as a measurement. It says "still going" and leaves the honest
+numbers to say the rest.
 
 ## How it works
 
@@ -667,10 +867,10 @@ So crema does them itself:
 | | |
 |---|---|
 | `/clear` | drop the conversation and the backend session behind it — the next message starts a run with no `--resume`, so the agent has never heard of any of it. The spend meter starts over too; `/compact` keeps its total, since the work continues |
-| `/autocompact` | fold this agent up on its own before it grows expensive — on by default at 80% of the window, `/autocompact off` to stop it |
-| `/compact` | ask the agent to summarise the conversation, then clear it and put that summary in front of your next message. Two steps, one extra turn, and the new session opens knowing where the old one got to |
+| `/compact` | ask the agent to summarise the conversation, then drop the agent's copy of it and put that summary in front of your next message. Two steps, one extra turn, and the new session opens knowing where the old one got to. The transcript on screen stays; a folded `▸ compacted` line marks where, with the summary behind it |
 | `/resume` | point the agent at any conversation this project has had — the CLI's own or crema's. `/resume` lists them newest first (when each last moved, how each began) in the option picker; `/resume <id>` attaches directly. Interactively this is the CLI's own session picker; headless the CLI doesn't offer it, so crema reads the same `~/.claude/projects` files the picker does |
 | `/model` | `/model opus` sets it; `/model` on its own opens the panel `↓` opens |
+| `/effort` | how hard this agent thinks — `/effort low\|medium\|high\|xhigh\|max`, or `/effort default`. `/effort` on its own opens the panel. The CLI takes this on the command line only, so changing it opens a new process and the note says so |
 | `/permissions` | the same panel |
 | `/rename` | call this agent something — `/rename api`, or `/rename` to undo |
 | `/cost` | spend, context, and the usage window, in the conversation |
@@ -789,6 +989,14 @@ what it is about to be. The moment the turn finishes, the one that has waited
 longest is sent on its own, and the next after that, in the order you wrote
 them; the line stops being dim and becomes an ordinary message.
 
+Sending anything scrolls the conversation back to the bottom, whether it starts
+a turn or joins the queue. Scrolling back to read something stops the pane
+chasing new output, which is right while you are reading — but sending is the
+end of reading, and what happens next lands at the bottom. If you were looking
+at a subagent's transcript, that closes too: the answer arrives in the agent's
+own conversation, whether the message was for the agent or for the subagent it
+relays to.
+
 Click one of those lines to take it back out — it goes into the input box, where
 you can change it and send it again, and any picture attached to it comes back
 with it. A draft you are part-way through is never overwritten: the message
@@ -835,7 +1043,7 @@ input box and along — model, then permissions, then the background work when
 there is any — and `↑` walks back, off the front and into the input box where
 it started. At the far end `↓` does nothing rather than wrapping to a place
 you did not ask for. `enter` opens the one highlighted, and its values are drawn in
-the status bar'''s own place at the bottom of the frame, so the picker has room
+the status bar's own place at the bottom of the frame, so the picker has room
 without covering the conversation. `esc` steps back out a layer at a time, and
 clicking a value in the hub does what selecting it does. Each agent has its
 own mode and model:

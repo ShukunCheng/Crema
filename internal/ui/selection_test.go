@@ -25,6 +25,116 @@ func selApp(t *testing.T) *App {
 	return a
 }
 
+// A double-click selects the word under the pointer, the way it does
+// everywhere else. What counts as a word is the same rule ctrl+backspace uses
+// in the input box: letters, digits and underscores, with punctuation as a
+// boundary rather than part of the word.
+func TestDoubleClickSelectsTheWord(t *testing.T) {
+	a := selApp(t)
+	x := a.lay.SidebarW
+	// "second line of output" is content line 1; "line" starts at column 7.
+	a.Update(drag(x+8, 1, tea.MouseActionPress))
+	a.Update(drag(x+8, 1, tea.MouseActionRelease))
+	a.Update(drag(x+8, 1, tea.MouseActionPress))
+	a.Update(drag(x+8, 1, tea.MouseActionRelease))
+	if got := a.cur().tl.SelectedText(); got != "line" {
+		t.Fatalf("double-click selected %q, want %q", got, "line")
+	}
+	if !a.cur().tl.HasSelection() {
+		t.Fatal("and it should be a real selection, copyable like any other")
+	}
+}
+
+// A header is a button, and clicking a button twice quickly is a thing people
+// do: folding a tool block open and shut again must not turn into a word
+// selection halfway through.
+func TestDoubleClickingAHeaderStillFoldsIt(t *testing.T) {
+	a := testApp(t)
+	s := a.cur()
+	s.tl.Append(Block{Kind: BlockTool, Name: "Bash", Text: "line one\nline two"})
+	s.tl.Update(kmsg(tea.KeyHome))
+
+	header := -1
+	for i := 0; i < 40; i++ {
+		if s.tl.HeaderBlockAt(i) == s.tl.Len()-1 {
+			header = i
+			break
+		}
+	}
+	if header < 0 {
+		t.Fatal("no header row found")
+	}
+	y := header - s.tl.YOffset()
+	x := a.lay.SidebarW + 2
+	for i := 0; i < 2; i++ { // two presses in a row, as fast as a double-click
+		a.Update(drag(x, y, tea.MouseActionPress))
+		a.Update(drag(x, y, tea.MouseActionRelease))
+	}
+	if !strings.Contains(s.tl.Content(), "line two") {
+		t.Fatalf("the second click should have expanded it again:\n%s", s.tl.Content())
+	}
+	if got := s.tl.SelectedText(); got != "" {
+		t.Fatalf("and it should not have selected a word, got %q", got)
+	}
+}
+
+// Two presses far enough apart are two clicks, not a double-click.
+func TestTwoSlowClicksAreNotADoubleClick(t *testing.T) {
+	a := selApp(t)
+	x := a.lay.SidebarW
+	a.Update(drag(x+8, 1, tea.MouseActionPress))
+	a.Update(drag(x+8, 1, tea.MouseActionRelease))
+	a.lastPaneClick = a.lastPaneClick.Add(-2 * doubleClick)
+	a.Update(drag(x+8, 1, tea.MouseActionPress))
+	a.Update(drag(x+8, 1, tea.MouseActionRelease))
+	if got := a.cur().tl.SelectedText(); got != "" {
+		t.Fatalf("selection = %q, want none", got)
+	}
+}
+
+// Word boundaries, on the shapes that actually turn up in agent output.
+func TestWordSpanAt(t *testing.T) {
+	for _, c := range []struct {
+		line string
+		col  int
+		want string
+	}{
+		{"internal/ui/app.go", 13, "app"},   // a path segment, not the path
+		{"internal/ui/app.go", 8, "/"},      // and the separator on its own
+		{"internal/ui/app.go", 16, "go"},    // the extension
+		{"fix/1234-order-issue", 4, "1234"}, // digits are word runes
+		{"snake_case_name x", 3, "snake_case_name"},
+		{"call(arg)", 5, "arg"},
+		{"a === b", 3, "==="}, // a run of punctuation goes together
+		{"one two", 3, ""},    // whitespace selects nothing
+		{"short", 40, ""},     // and neither does the void past the end
+		{"héllo wörld", 2, "héllo"},
+		{"│ tool output here", 7, "output"}, // the tool rail is not part of it
+	} {
+		start, end := wordSpanAt(c.line, c.col)
+		got := ""
+		if start < end {
+			got = string([]rune(c.line)[colToRune(c.line, start):colToRune(c.line, end)])
+		}
+		if got != c.want {
+			t.Errorf("wordSpanAt(%q, %d) = %q, want %q", c.line, c.col, got, c.want)
+		}
+	}
+}
+
+// colToRune turns a display column back into a rune index, for the test to
+// read the span it was given.
+func colToRune(line string, col int) int {
+	w := 0
+	for i, r := range []rune(line) {
+		if w >= col {
+			return i
+		}
+		w += runeWidth(r)
+	}
+	return len([]rune(line))
+}
+
 func TestDragSelectsAcrossLines(t *testing.T) {
 	a := selApp(t)
 	tl := a.cur().tl

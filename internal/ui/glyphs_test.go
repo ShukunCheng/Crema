@@ -32,7 +32,7 @@ var consoleFontGlyphs = []rune(
 	"·×—…›" + // punctuation and separators
 		"←↑→↓−" + // arrows and the diff's minus
 		"─│" + // box drawing: rails and rules
-		"▸▾●◨▌" + // markers: folded, open, agent state, split view, text cursor
+		"▸▾●○◨▌" + // markers: folded, open, agent state, a subagent, split view, text cursor
 		"✓⨯❯" + // ok, canceled, prompt
 		"∙", // spinner.Dot, which comes from bubbles rather than this package
 )

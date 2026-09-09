@@ -410,7 +410,7 @@ func TestKeysGoToThePickerWhileItIsOpen(t *testing.T) {
 	}
 }
 
-func TestSidebarTogglesAndStatusCountsRunningAgents(t *testing.T) {
+func TestSidebarTogglesAndStatusNamesTheAgent(t *testing.T) {
 	a := testApp(t)
 	if !a.lay.ShowSidebar {
 		t.Fatal("sidebar should start visible at 140 cols")
@@ -428,10 +428,14 @@ func TestSidebarTogglesAndStatusCountsRunningAgents(t *testing.T) {
 	a.selectSession(0)
 	a.in.ta.SetValue("work")
 	a.Update(kmsg(tea.KeyEnter))
-	if !strings.Contains(a.statusLine(), "1 running") {
-		t.Fatalf("status should report running agents: %q", a.statusLine())
-	}
 	if !strings.Contains(a.statusLine(), "[1/2]") {
 		t.Fatalf("status should show which agent is focused: %q", a.statusLine())
 	}
+	// Which agents are running is the sidebar's job — it has a row each and
+	// says what every one of them is doing. A tally in the hub said less in
+	// more words, and stood on the line the note wants.
+	if strings.Contains(a.statusLine(), "running") {
+		t.Fatalf("the hub should not tally running agents: %q", a.statusLine())
+	}
+	a.cur().close()
 }

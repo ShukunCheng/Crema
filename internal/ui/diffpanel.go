@@ -146,6 +146,10 @@ type DiffPanel struct {
 	// The diff is as worth copying as the conversation is — a path, a hunk
 	// header, the line an agent just changed — so it selects the same way.
 	sel selection
+	// xoff is how far the body is slid sideways, in display columns, and
+	// contentW how wide the rows were drawn. See diffscroll.go.
+	xoff     int
+	contentW int
 }
 
 func NewDiffPanel(w, h int) *DiffPanel {
@@ -159,8 +163,17 @@ func NewDiffPanel(w, h int) *DiffPanel {
 
 func (d *DiffPanel) SetSize(w, h int) {
 	d.width, d.height = max(1, w), max(1, h)
-	d.vp.Width, d.vp.Height = d.bodyWidth(), max(1, d.height-1-d.searchRows())
+	d.vp.Width = d.bodyWidth()
+	// The height is settled after the render, because whether the horizontal
+	// bar is there at all depends on how wide the content turned out.
+	d.vp.Height = max(1, d.height-1-d.searchRows())
 	d.render()
+}
+
+// fitHeight gives the viewport what is left after the header, the search box
+// and the horizontal bar.
+func (d *DiffPanel) fitHeight() {
+	d.vp.Height = max(1, d.height-1-d.searchRows()-d.hbarRows())
 }
 
 // bodyWidth is how much the diff itself gets: everything, unless the file
@@ -209,7 +222,11 @@ func (d *DiffPanel) SetView(v DiffView) {
 func (d *DiffPanel) render() {
 	d.vp.Style = base()
 	off := d.vp.YOffset
-	w := d.bodyWidth()
+	// The rows are drawn at the content's own width when the view slides, so
+	// what is on screen can be a cut out of a whole line rather than a line
+	// that was cut before it was ever drawn.
+	w := d.renderWidth()
+	d.contentW = w
 	switch {
 	case d.browsing():
 		d.rows = d.browserBody(w)
@@ -226,6 +243,8 @@ func (d *DiffPanel) render() {
 			d.search.idx = 0
 		}
 	}
+	d.clampX()
+	d.fitHeight()
 	d.sync()
 	d.vp.SetYOffset(off)
 }
@@ -234,14 +253,16 @@ func (d *DiffPanel) render() {
 // selection painted over them, in that order: a selection is something you are
 // doing now, so it wins the cells it covers.
 func (d *DiffPanel) sync() {
-	if !d.sel.hasRange() && len(d.search.hits) == 0 {
-		d.vp.SetContent(joinRows(d.rows))
-		return
+	lines := d.contentLines()
+	if len(d.search.hits) > 0 {
+		lines = paintHits(lines, d.search.hits, d.search.idx)
 	}
-	lines := paintHits(d.contentLines(), d.search.hits, d.search.idx)
 	if d.sel.hasRange() {
 		lines = d.sel.paint(lines)
 	}
+	// Sliding comes last: the highlights are placed in the content's own
+	// columns, and this is the one step that turns those into screen columns.
+	lines = d.window(lines)
 	d.vp.SetContent(strings.Join(lines, "\n") + "\n")
 }
 
@@ -283,6 +304,21 @@ func (d *DiffPanel) ClearSelection() {
 
 func (d *DiffPanel) HasSelection() bool { return d.sel.done() }
 
+// SelectWordAt highlights the word under a content position — the diff's half
+// of double-click-to-select-a-word, by the same rule the conversation uses.
+func (d *DiffPanel) SelectWordAt(line, col int) bool {
+	lines := d.contentLines()
+	if line < 0 || line >= len(lines) {
+		return false
+	}
+	start, end := wordSpanAt(lines[line], col)
+	if !d.sel.selectSpan(line, start, end) {
+		return false
+	}
+	d.sync()
+	return true
+}
+
 // SelectedText is the plain text under the highlight.
 func (d *DiffPanel) SelectedText() string { return d.sel.text(d.contentLines()) }
 
@@ -316,9 +352,38 @@ func (d *DiffPanel) Update(msg tea.Msg) tea.Cmd {
 		switch k.String() {
 		case "home":
 			d.vp.GotoTop()
+			d.ScrollX(-d.contentW) // the top of a diff is its left edge too
 			return nil
 		case "end":
 			d.vp.GotoBottom()
+			return nil
+		case "left":
+			d.ScrollX(-hscrollStep)
+			return nil
+		case "right":
+			d.ScrollX(hscrollStep)
+			return nil
+		}
+	}
+	// Shift and the wheel is how the rest of the desktop scrolls sideways.
+	if m, ok := msg.(tea.MouseMsg); ok && m.Shift {
+		switch m.Button {
+		case tea.MouseButtonWheelUp, tea.MouseButtonWheelLeft:
+			d.ScrollX(-hscrollStep)
+			return nil
+		case tea.MouseButtonWheelDown, tea.MouseButtonWheelRight:
+			d.ScrollX(hscrollStep)
+			return nil
+		}
+	}
+	// A terminal that reports a sideways wheel at all needs no shift.
+	if m, ok := msg.(tea.MouseMsg); ok {
+		switch m.Button {
+		case tea.MouseButtonWheelLeft:
+			d.ScrollX(-hscrollStep)
+			return nil
+		case tea.MouseButtonWheelRight:
+			d.ScrollX(hscrollStep)
 			return nil
 		}
 	}
@@ -333,6 +398,9 @@ func (d *DiffPanel) View() string {
 		body = d.browserView(d.vp.Height)
 	}
 	out := d.headerRow(d.width) + "\n" + body
+	if d.hbarRows() > 0 {
+		out += "\n" + d.hbar(d.width)
+	}
 	if d.search.open {
 		out += "\n" + d.searchBar(d.width)
 	}

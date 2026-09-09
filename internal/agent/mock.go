@@ -23,6 +23,19 @@ func (m *Mock) Modes() []PermissionMode {
 
 func (m *Mock) Models() []string { return []string{DefaultModel, "demo-fast", "demo-slow"} }
 
+// The mock carries an effort setting because the real backend has one, and a
+// demo that is missing a control is a demo of the wrong interface.
+func (m *Mock) Efforts() []string {
+	return []string{DefaultEffort, "low", "medium", "high", "xhigh", "max"}
+}
+
+func (m *Mock) DescribeEffort(level string) string {
+	if level == DefaultEffort {
+		return "whatever the CLI is configured to use"
+	}
+	return "demo effort: " + level
+}
+
 func (m *Mock) Run(ctx context.Context, opts RunOptions) (<-chan Event, error) {
 	ch := make(chan Event, 8)
 	script := []Event{

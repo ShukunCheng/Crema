@@ -46,11 +46,20 @@ func StatusRows(h int) int {
 type StatusData struct {
 	Agent, Mode, Dir, Spin, Note string
 	Model                        string
-	Diff                         DiffView
-	Busy                         bool
-	ElapsedSec                   float64
-	Cost                         float64
-	Adds, Dels                   int
+	// Effort is how hard the agent is asked to think, "" when the backend has
+	// no such setting. It sits beside the permission mode because that is what
+	// it is — a thing this agent is set to — and because it is the only one of
+	// them that costs a process to change. EffortSet says it has been chosen
+	// rather than left at the CLI's own default: an agent on the default has
+	// nothing to say here, so the row stays short until the walk arrives on
+	// it, and then it shows so there is something to see.
+	Effort     string
+	EffortSet  bool
+	Diff       DiffView
+	Busy       bool
+	ElapsedSec float64
+	Cost       float64
+	Adds, Dels int
 	// Branch and Untracked come from the same git read as Adds/Dels and make
 	// up the git:(…) group.
 	Branch    string
@@ -377,8 +386,17 @@ func modeRow(s StatusData, w int, rec picks, row int) string {
 		hint := " (ctrl+p to change)"
 		if s.Picking {
 			hint = " (↑↓ move · enter open · esc close)"
+			if s.Pick == controlAgent || s.Pick == controlMain {
+				hint = " (↑↓ move · enter talk · x stop · esc close)"
+			}
 		}
 		l = append(l, txt(T.Muted, hint))
+	}
+	if s.Effort != "" && (s.EffortSet || (s.Picking && s.Pick == controlEffort)) {
+		l = append(l, txt(T.Muted, " · "))
+		g := boldTxt(T.Lilac, "effort "+s.Effort)
+		rec.mark(controlEffort, row, l, g)
+		l = append(l, picked(s, controlEffort, g))
 	}
 	if s.Shells > 0 || s.Agents > 0 {
 		l = append(l, txt(T.Muted, " · "))

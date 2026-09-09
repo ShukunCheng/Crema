@@ -20,6 +20,10 @@ const (
 	BlockError
 	BlockSystem
 	BlockStats
+	// BlockSummary is what a compaction leaves behind: the summary the agent
+	// carries forward, standing in the transcript where the fold happened.
+	// It arrives folded — the conversation above it is the readable version.
+	BlockSummary
 )
 
 // Block is one entry in a conversation. The json tags are what gets written to
@@ -56,10 +60,19 @@ func changesFiles(tool string) bool { return fileChangeTools[strings.ToLower(too
 // the bulky ones; prose and stats always stay visible.
 func collapsible(k BlockKind) bool {
 	switch k {
-	case BlockTool, BlockToolOutput, BlockThinking, BlockError:
+	case BlockTool, BlockToolOutput, BlockThinking, BlockError, BlockSummary:
 		return true
 	}
 	return false
+}
+
+// runMates reports whether two folded neighbours stand behind one summary
+// line. A subagent's run and the main turn's never merge: the line says whose
+// work it is, so it can only stand for one of them. A compaction summary
+// folds alone for the same reason — "Ran 3 shell commands" cannot also mean
+// "and the conversation was folded up here".
+func runMates(a, b Block) bool {
+	return a.Sub == b.Sub && a.Kind != BlockSummary && b.Kind != BlockSummary
 }
 
 // folded is a block that is currently standing behind a summary line. A
@@ -79,12 +92,10 @@ func foldRun(blocks []Block, i int) (from, to int) {
 		return i, i
 	}
 	from, to = i, i+1
-	// A subagent's run and the main turn's never merge: the summary line says
-	// whose work it is, so it can only stand for one of them.
-	for from > 0 && folded(blocks[from-1]) && blocks[from-1].Sub == blocks[i].Sub {
+	for from > 0 && folded(blocks[from-1]) && runMates(blocks[from-1], blocks[i]) {
 		from--
 	}
-	for to < len(blocks) && folded(blocks[to]) && blocks[to].Sub == blocks[i].Sub {
+	for to < len(blocks) && folded(blocks[to]) && runMates(blocks[to], blocks[i]) {
 		to++
 	}
 	return from, to
@@ -126,6 +137,11 @@ func (t *Timeline) SetSize(w, h int) {
 	t.vp.Width, t.vp.Height = w, h
 	t.sync()
 }
+
+// Width and Height are the pane this timeline was last sized to, so a second
+// timeline — a subagent's — can be opened at the same size.
+func (t *Timeline) Width() int  { return t.width }
+func (t *Timeline) Height() int { return t.vp.Height }
 
 // renderAt draws one block. A folded block is part of a run: only the first of
 // the run draws anything, and it draws the whole run's summary. The others
@@ -209,6 +225,20 @@ func (t *Timeline) ShowAnswer() {
 // Blocks exposes the conversation for saving.
 func (t *Timeline) Blocks() []Block { return t.blocks }
 
+// ReplaceAnswer swaps the reply to the last message — everything after the
+// last user block — for one block. A compaction's summarising turn is asked
+// for and shown like any other, but its reply is not an answer to read; it is
+// the fold, and one folded line is what it should leave behind.
+func (t *Timeline) ReplaceAnswer(b Block) {
+	i := len(t.blocks)
+	for i > 0 && t.blocks[i-1].Kind != BlockUser {
+		i--
+	}
+	t.blocks = append(t.blocks[:i], b)
+	t.renderAll()
+	t.sync()
+}
+
 // Restore replaces the conversation with previously saved blocks.
 func (t *Timeline) Restore(blocks []Block) {
 	t.blocks = append(t.blocks[:0], blocks...)
@@ -259,6 +289,11 @@ func (t *Timeline) AppendEvent(ev agent.Event) {
 				Collapsed: !ev.Output.IsError,
 			})
 		}
+	case agent.KindUser:
+		// Only a subagent transcript has these: the prompt the main agent
+		// handed it, which is the first thing worth reading about a subagent
+		// and the thing crema used to have to ask for.
+		t.Append(Block{Kind: BlockUser, Text: ev.Text, Sub: sub})
 	case agent.KindError:
 		t.Append(Block{Kind: BlockError, Text: ev.Text})
 	case agent.KindTurnEnd:
@@ -430,6 +465,8 @@ func arrivesFolded(b Block) bool {
 		return !b.IsErr
 	case BlockAssistant:
 		return b.Sub // a subagent's prose is an aside; the answer never folds
+	case BlockSummary:
+		return true // the conversation above it is the readable version
 	}
 	return false
 }
@@ -444,10 +481,10 @@ func refoldRange(blocks []Block, i int) (from, to int) {
 		return i, i + 1
 	}
 	from, to = i, i+1
-	for from > 0 && arrivesFolded(blocks[from-1]) && blocks[from-1].Sub == blocks[i].Sub {
+	for from > 0 && arrivesFolded(blocks[from-1]) && runMates(blocks[from-1], blocks[i]) {
 		from--
 	}
-	for to < len(blocks) && arrivesFolded(blocks[to]) && blocks[to].Sub == blocks[i].Sub {
+	for to < len(blocks) && arrivesFolded(blocks[to]) && runMates(blocks[to], blocks[i]) {
 		to++
 	}
 	return from, to
@@ -530,6 +567,9 @@ func count(one, many string, n int) string {
 // belongs to the call above it, and "Ran 2 shell commands" already implies two
 // of them. A run of nothing but output says so, since that is all it is.
 func summarize(run []Block) string {
+	if len(run) > 0 && run[0].Kind == BlockSummary {
+		return compactedLabel // it folds alone; the run is this one block
+	}
 	buckets := make([]int, len(toolPhrase))
 	other := map[string]int{}
 	var names []string // distinct unrecognised tools, in the order they ran
@@ -598,6 +638,8 @@ func renderExpanded(b Block, w int) string {
 		return RenderSystem(b.Text, w)
 	case BlockStats:
 		return RenderStats(b.Result, w)
+	case BlockSummary:
+		return RenderSummary(b.Text, w)
 	default:
 		return RenderAssistant(b.Text, w)
 	}

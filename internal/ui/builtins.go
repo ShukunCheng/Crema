@@ -39,10 +39,10 @@ func init() {
 	builtins = []builtin{
 		{name: "clear", desc: "start over — the agent forgets this conversation", needsIdle: true, run: runClear},
 		{name: "compact", desc: "summarise this conversation and carry it into a fresh one", needsIdle: true, run: runCompact},
-		{name: "autocompact", desc: "fold this agent up on its own before it grows expensive — /autocompact on|off", run: runAutoCompact},
 		{name: "resume", desc: "point this agent at another of the project's conversations — /resume for the list", needsIdle: true, run: runResume},
 		{name: "model", desc: "the model for this agent — /model opus, or /model for the list", run: runModel},
 		{name: "permissions", desc: "what this agent is allowed to do", run: runPermissions},
+		{name: "effort", desc: "how hard this agent thinks — /effort low|medium|high|xhigh|max, or /effort default", run: runEffort},
 		{name: "rename", desc: "call this agent something — /rename api, or /rename to undo", run: runRename},
 		{name: "cost", desc: "what this agent has spent, and how full its windows are", run: runCost},
 		{name: "diff", desc: "hide the diff, put it beside the conversation, or full screen", run: runDiff},
@@ -66,7 +66,7 @@ func init() {
 // for one that doesn't.
 var interactiveOnly = []string{
 	"agents", "color", "config", "context", "debug", "doctor",
-	"effort", "extra-usage", "fast", "heapdump", "import", "mcp", "reload-skills",
+	"extra-usage", "fast", "heapdump", "import", "mcp", "reload-skills",
 	"usage", "usage-credits",
 }
 
@@ -197,7 +197,8 @@ func runClear(a *App, s *Session, _ string) tea.Cmd {
 }
 
 // compactPrompt is what crema asks for on /compact. The reply is the only
-// thing that survives the clear, so it has to carry the whole working state.
+// thing the agent keeps of the conversation, so it has to carry the whole
+// working state.
 const compactPrompt = `Summarise this conversation so it can be carried into a fresh session.
 
 Cover: what we are working on, the decisions taken and why, the files touched
@@ -210,13 +211,24 @@ func runCompact(a *App, s *Session, _ string) tea.Cmd {
 		a.note = "nothing to compact yet"
 		return nil
 	}
-	s.compacting = true
+	s.noteCompacting()
 	a.note = "compacting — asking the agent to summarise this conversation"
 	return tea.Batch(s.startTurn("/compact", compactPrompt), a.sp.Tick)
 }
 
-// finishCompact runs when the summarising turn ends: the conversation goes,
-// and the summary it produced is held back to open the next one.
+// finishCompact runs when the summarising turn ends: the agent's conversation
+// goes, and the summary it produced is held back to open the next one.
+//
+// The transcript on screen stays. It is crema's, not the agent's, and what is
+// on it is what you were reading: an autocompact fires the moment a turn
+// ends, so the answer to your last message is the newest thing there. Wiping
+// the pane and showing the summary in its place — pages of it — took that
+// answer away before it had been read. So the reply to the summarising turn
+// is swapped for one folded line saying what happened, the summary a click
+// away behind it, and the conversation carries on underneath.
+//
+// Anything queued during the summarising turn is kept too: it was typed into
+// this conversation, and the folded one is the same conversation, cheaper.
 func (a *App) finishCompact(s *Session) {
 	s.compacting = false
 	summary := s.tl.LastText()
@@ -224,10 +236,11 @@ func (a *App) finishCompact(s *Session) {
 		a.note = "compact failed — the conversation is untouched"
 		return
 	}
-	s.reset()
+	s.closeConv() // the next message opens a process with no --resume
+	s.agentSID = ""
+	s.ctxTokens, s.ctxWindow = 0, 0
 	s.preamble = "This continues an earlier session. Here is where it had got to:\n\n" + summary
-	s.tl.Append(Block{Kind: BlockSystem, Text: "compacted — the agent starts fresh, " +
-		"knowing this much:\n\n" + summary})
+	s.tl.ReplaceAnswer(Block{Kind: BlockSummary, Text: summary, Collapsed: true})
 	a.note = "compacted"
 	a.persist()
 }
@@ -276,6 +289,43 @@ func runRename(a *App, s *Session, arg string) tea.Cmd {
 	}
 	a.persist()
 	return nil
+}
+
+// runEffort is /effort: how hard the agent is asked to think. The CLI has one
+// of these too, but interactively — headless it is a command-line flag, so it
+// is crema's to carry.
+func runEffort(a *App, s *Session, arg string) tea.Cmd {
+	levels := s.efforts()
+	if len(levels) <= 1 {
+		a.note = s.Backend.Label() + " has no effort setting"
+		return nil
+	}
+	arg = strings.ToLower(strings.TrimSpace(arg))
+	if arg == "" {
+		return a.openControls()
+	}
+	if arg == "default" {
+		s.SetEffort(agent.DefaultEffort)
+		a.persist()
+		return nil
+	}
+	for _, e := range levels {
+		if e != agent.DefaultEffort && e == arg {
+			s.SetEffort(e)
+			a.persist()
+			return nil
+		}
+	}
+	a.note = arg + " is not one of " + strings.Join(effortNames(levels), ", ")
+	return nil
+}
+
+func effortNames(levels []string) []string {
+	out := make([]string, 0, len(levels))
+	for _, e := range levels {
+		out = append(out, effortLabel(e))
+	}
+	return out
 }
 
 func runPermissions(a *App, _ *Session, _ string) tea.Cmd {

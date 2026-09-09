@@ -125,6 +125,19 @@ func RenderSystem(text string, w int) string {
 	return body(w).Foreground(T.Muted).Italic(true).Render("· "+linkify(text)) + "\n"
 }
 
+// compactedLabel is the one line a compaction leaves in the transcript, folded
+// or open. The conversation it summarises is still on screen above it — that
+// is the readable version — so the line says what happened and where the
+// agent picks up from; the ▸ in front says the summary itself is one click
+// away, as it does for every other folded line.
+const compactedLabel = "compacted · the agent carries on from a summary of everything above"
+
+func RenderSummary(text string, w int) string {
+	txt := body(max(1, w-2)).Foreground(T.Muted).Italic(true).Render(text)
+	return fg(T.Muted).Italic(true).Width(max(1, w)).Render("▾ "+compactedLabel) + "\n" +
+		rail(txt, T.Muted) + "\n"
+}
+
 func RenderStats(r *agent.TurnResult, w int) string {
 	if r == nil {
 		return ""

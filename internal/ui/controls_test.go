@@ -370,9 +370,9 @@ func TestClickingTheBottomStripPicksAValue(t *testing.T) {
 	}
 }
 
-// The highlight is the selection: ↓ then ←→ moves it between the values the
-// hub already shows, rather than drawing a second copy of them over the
-// conversation.
+// The highlight is the selection: ↓ then the arrows move it between what is
+// running and the values the hub already shows, rather than drawing a second
+// copy of any of it over the conversation.
 func TestTheHighlightWalksTheHub(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor) // TestMain strips colour; the highlight is colour
 	defer lipgloss.SetColorProfile(termenv.Ascii)
@@ -394,25 +394,34 @@ func TestTheHighlightWalksTheHub(t *testing.T) {
 		return false
 	}
 
-	if openControls(t, a); !highlighted("demo-fast") {
-		t.Fatal("↓ should highlight the model where it is already written")
+	openControls(t, a)
+	if !highlighted("demo-fast") {
+		t.Fatal("↓ lands on the model, where the hub already writes it")
 	}
 	a.Update(kmsg(tea.KeyRight))
 	if !highlighted("full access") || highlighted("demo-fast") {
-		t.Fatal("→ should move the highlight to the permission mode")
+		t.Fatal("→ moves onto the permission mode")
 	}
 	a.Update(kmsg(tea.KeyRight))
-	if !highlighted("1 agent") || highlighted("full access") {
-		t.Fatal("→ again should reach the background work")
+	if !highlighted("effort") || highlighted("full access") {
+		t.Fatal("→ again reaches the effort dial")
+	}
+	a.Update(kmsg(tea.KeyRight))
+	if !highlighted("main") || highlighted("effort") {
+		t.Fatal("→ again reaches the roster's first row, the agent itself")
+	}
+	a.Update(kmsg(tea.KeyRight))
+	if !highlighted("general-purpose") || highlighted("main") {
+		t.Fatal("→ again reaches the subagent's row")
 	}
 	a.Update(kmsg(tea.KeyEsc))
-	if highlighted("1 agent") {
-		t.Fatal("esc puts the hub back to plain")
+	if highlighted("general-purpose") || highlighted("demo-fast") {
+		t.Fatal("esc puts everything back to plain")
 	}
 }
 
-// All four arrows move the highlight; only enter opens what it is on. ↓ used
-// to open the highlighted value, which made walking past one impossible
+// All four arrows move the highlight; only enter acts on what it is on. ↓
+// used to open the highlighted value, which made walking past one impossible
 // without opening it on the way.
 func TestArrowsMoveAndOnlyEnterOpens(t *testing.T) {
 	a := testApp(t)
@@ -421,30 +430,31 @@ func TestArrowsMoveAndOnlyEnterOpens(t *testing.T) {
 	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "running", Type: "general-purpose", Desc: "audit"})
 	c := openControls(t, a)
 	if c.Kind() != controlModel || c.Open() {
-		t.Fatalf("↓ from the input lands on the model, unopened: kind=%v open=%v", c.Kind(), c.Open())
+		t.Fatalf("↓ from the input lands on the model, nothing open: kind=%v open=%v", c.Kind(), c.Open())
 	}
 
-	a.Update(kmsg(tea.KeyDown))
-	if c.Open() || c.Kind() != controlPermission {
-		t.Fatalf("↓ should walk on, not open: kind=%v open=%v", c.Kind(), c.Open())
-	}
-	a.Update(kmsg(tea.KeyDown))
-	if c.Open() || c.Kind() != controlBackground {
-		t.Fatalf("↓ again reaches the background work: kind=%v open=%v", c.Kind(), c.Open())
+	for i, want := range []controlKind{controlPermission, controlEffort, controlMain, controlAgent} {
+		a.Update(kmsg(tea.KeyDown))
+		if c.Open() || c.Kind() != want {
+			t.Fatalf("↓ #%d should walk on, not open: kind=%v open=%v", i+1, c.Kind(), c.Open())
+		}
 	}
 	a.Update(kmsg(tea.KeyUp))
-	if c.Open() || c.Kind() != controlPermission {
+	if c.Open() || c.Kind() != controlMain {
 		t.Fatalf("↑ walks back: kind=%v open=%v", c.Kind(), c.Open())
 	}
-	a.Update(kmsg(tea.KeyRight))
-	if c.Kind() != controlBackground {
-		t.Fatal("→ moves the same way as ↓")
-	}
 	a.Update(kmsg(tea.KeyLeft))
-	if c.Kind() != controlPermission {
+	if c.Kind() != controlEffort {
 		t.Fatal("← moves the same way as ↑")
 	}
-
+	a.Update(kmsg(tea.KeyRight))
+	if c.Kind() != controlMain {
+		t.Fatal("→ moves the same way as ↓")
+	}
+	// Back to the permission mode, whose list has a value worth applying.
+	for c.Kind() != controlPermission {
+		a.Update(kmsg(tea.KeyLeft))
+	}
 	a.Update(kmsg(tea.KeyEnter))
 	if !c.Open() {
 		t.Fatal("enter is the only thing that opens one")
@@ -464,39 +474,36 @@ func TestArrowsMoveAndOnlyEnterOpens(t *testing.T) {
 }
 
 // The settings are a walk out from the input box and back, not a carousel:
-// ↓ steps in and along, ↓ at the far end does nothing, and ↑ off the front
-// returns to the input where the walk began.
+// ↓ steps in and along — the hub's own values first, then the running work —
+// ↓ at the far end does nothing, and ↑ off the front returns to the input
+// where the walk began.
 func TestTheSettingsWalkOutAndBack(t *testing.T) {
 	a := testApp(t)
 	a.resize(120, 26)
 	s := a.cur()
 	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "running", Type: "general-purpose", Desc: "audit"})
 
-	press(t, a, kmsg(tea.KeyDown)) // from the input: model
+	press(t, a, kmsg(tea.KeyDown)) // from the input: the model
 	c := a.controls
 	if c == nil || c.Kind() != controlModel {
 		t.Fatalf("↓ from the input should land on the model: %+v", c)
 	}
-	press(t, a, kmsg(tea.KeyDown))
-	if c.Kind() != controlPermission {
-		t.Fatalf("then permissions: %v", c.Kind())
+	for _, want := range []controlKind{controlPermission, controlEffort, controlMain, controlAgent} {
+		press(t, a, kmsg(tea.KeyDown))
+		if c.Kind() != want {
+			t.Fatalf("then %v, got %v", want, c.Kind())
+		}
 	}
 	press(t, a, kmsg(tea.KeyDown))
-	if c.Kind() != controlBackground {
-		t.Fatalf("then the background work: %v", c.Kind())
-	}
-	press(t, a, kmsg(tea.KeyDown))
-	if a.controls == nil || c.Kind() != controlBackground {
+	if a.controls == nil || c.Kind() != controlAgent {
 		t.Fatal("↓ at the far end does nothing — it must not wrap or drop out")
 	}
 
-	press(t, a, kmsg(tea.KeyUp))
-	if c.Kind() != controlPermission {
-		t.Fatalf("↑ walks back: %v", c.Kind())
-	}
-	press(t, a, kmsg(tea.KeyUp))
-	if c.Kind() != controlModel {
-		t.Fatalf("and back: %v", c.Kind())
+	for _, want := range []controlKind{controlMain, controlEffort, controlPermission, controlModel} {
+		press(t, a, kmsg(tea.KeyUp))
+		if c.Kind() != want {
+			t.Fatalf("↑ walks back to %v, got %v", want, c.Kind())
+		}
 	}
 	press(t, a, kmsg(tea.KeyUp))
 	if a.controls != nil {
@@ -507,18 +514,14 @@ func TestTheSettingsWalkOutAndBack(t *testing.T) {
 	}
 }
 
-// With nothing running there is no third stop: ↓ off permissions stays put.
+// With nothing running the walk ends at the last of the hub's own values:
+// ↓ off it stays put rather than wrapping or dropping back to the input.
 func TestTheWalkEndsWhereTheValuesDo(t *testing.T) {
 	a := testApp(t)
 	a.resize(120, 26)
+	c := walkTo(t, a, controlEffort)
 	press(t, a, kmsg(tea.KeyDown))
-	press(t, a, kmsg(tea.KeyDown))
-	c := a.controls
-	if c == nil || c.Kind() != controlPermission {
-		t.Fatalf("two steps in: %+v", c)
-	}
-	press(t, a, kmsg(tea.KeyDown))
-	if a.controls == nil || c.Kind() != controlPermission {
+	if a.controls == nil || c.Kind() != controlEffort {
 		t.Fatal("no background work, so there is nowhere further to go")
 	}
 }

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -42,20 +43,22 @@ func NewInput(w int) *Input {
 	ta.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("ctrl+enter", "shift+enter", "alt+enter", "ctrl+j"),
 		key.WithHelp("shift+enter", "newline"))
-	// Delete-word is ctrl+backspace, not the textarea's alt+backspace. Most
-	// terminals send ^H for it, so that is bound too — and taken off
-	// delete-character, which claims ^H by default and would win the match.
-	// ctrl+w is dropped as well: the app uses it to close an agent.
-	ta.KeyMap.DeleteWordBackward = key.NewBinding(
-		key.WithKeys("ctrl+backspace", "ctrl+h"), key.WithHelp("ctrl+backspace", "delete word"))
+	// Delete-word is handled in Update rather than here, because the text
+	// area's own rule is "back to the nearest space" and that is not what a
+	// word is. Its binding is emptied so there is no second, shadowed answer
+	// to the same key. ctrl+h matters because most terminals send it for
+	// ctrl+backspace, and it is taken off delete-character, which claims ^H
+	// by default and would otherwise win the match. ctrl+w is left out too:
+	// the app uses it to close an agent.
+	ta.KeyMap.DeleteWordBackward = key.NewBinding(key.WithDisabled())
 	ta.KeyMap.DeleteCharacterBackward = key.NewBinding(
 		key.WithKeys("backspace"), key.WithHelp("backspace", "delete character"))
 	// Jump a word with ctrl+arrow, which is what the rest of the desktop uses.
-	// The text area's own alt+arrow keeps working for anyone used to it.
-	ta.KeyMap.WordBackward = key.NewBinding(
-		key.WithKeys("ctrl+left", "alt+left", "alt+b"), key.WithHelp("ctrl+←", "previous word"))
-	ta.KeyMap.WordForward = key.NewBinding(
-		key.WithKeys("ctrl+right", "alt+right", "alt+f"), key.WithHelp("ctrl+→", "next word"))
+	// Handled in Update for the same reason delete-word is: the text area's own
+	// rule is "to the nearest space", which walks a whole branch name in one
+	// press. Its bindings are emptied so there is no second, shadowed answer.
+	ta.KeyMap.WordBackward = key.NewBinding(key.WithDisabled())
+	ta.KeyMap.WordForward = key.NewBinding(key.WithDisabled())
 	ta.Focus()
 	i := &Input{ta: ta, width: max(1, w), rows: 1}
 	i.ApplyTheme()
@@ -189,10 +192,192 @@ func (i *Input) Blur()          { i.ta.Blur() }
 func (i *Input) Focused() bool  { return i.ta.Focused() }
 
 func (i *Input) Update(msg tea.Msg) tea.Cmd {
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch {
+		case isDeleteWordBack(k):
+			i.deleteWordBack()
+			i.syncHeight()
+			return nil
+		case isWordLeft(k):
+			i.moveWord(-1)
+			return nil
+		case isWordRight(k):
+			i.moveWord(1)
+			return nil
+		}
+	}
 	var cmd tea.Cmd
 	i.ta, cmd = i.ta.Update(msg)
 	i.syncHeight()
 	return cmd
+}
+
+// isDeleteWordBack recognises the delete-word key however this terminal spells
+// it. Most send ^H for ctrl+backspace; the Windows console sends a plain
+// backspace and throws the control state away, and keyPress recovers it into
+// ^H before the key gets here.
+func isDeleteWordBack(k tea.KeyMsg) bool {
+	switch k.String() {
+	case "ctrl+h", "ctrl+backspace":
+		return true
+	}
+	return false
+}
+
+// isWordLeft and isWordRight are the jump-a-word keys. ctrl+arrow is what the
+// rest of the desktop uses; alt+arrow is the terminal spelling the text area
+// came with, and alt+b / alt+f the emacs one, both kept for anyone used to
+// them.
+func isWordLeft(k tea.KeyMsg) bool {
+	switch k.String() {
+	case "ctrl+left", "alt+left", "alt+b":
+		return true
+	}
+	return false
+}
+
+func isWordRight(k tea.KeyMsg) bool {
+	switch k.String() {
+	case "ctrl+right", "alt+right", "alt+f":
+		return true
+	}
+	return false
+}
+
+// moveWord walks the caret one word left (dir -1) or right (dir 1), by the
+// same rule ctrl+backspace deletes by — punctuation is a boundary, so
+// ctrl+← through `fix/1234-order-workspace-issue` stops at every part of it
+// rather than stepping over the whole thing. Jumping and deleting agreeing
+// about where a word ends is the point: otherwise ctrl+← then ctrl+backspace
+// takes something other than what you just walked past.
+//
+// The move is made of that many plain arrow presses, for the same reason the
+// delete is made of backspaces: the caret and the wrapping stay the text
+// area's own business.
+func (i *Input) moveWord(dir int) {
+	n, key := 0, tea.KeyLeft
+	if dir < 0 {
+		n = wordBackLen(i.beforeCursor())
+	} else {
+		n, key = wordFwdLen(i.afterCursor()), tea.KeyRight
+	}
+	if n == 0 {
+		// Nothing left on this row in that direction: the thing beyond it is
+		// the line break, and one arrow steps over it the way it would.
+		n = 1
+	}
+	for ; n > 0; n-- {
+		i.ta, _ = i.ta.Update(tea.KeyMsg{Type: key})
+	}
+}
+
+// wordFwdLen is how far ctrl+→ moves: over any whitespace in the way, and
+// then one run — of word runes, or of the punctuation between them. The
+// mirror of wordBackLen, so a jump out and back lands where it started.
+func wordFwdLen(rs []rune) int {
+	n := 0
+	for n < len(rs) && unicode.IsSpace(rs[n]) {
+		n++
+	}
+	if n == len(rs) {
+		return n // whitespace all the way to the end
+	}
+	word := isWordRune(rs[n])
+	for n < len(rs) {
+		r := rs[n]
+		if unicode.IsSpace(r) || isWordRune(r) != word {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// deleteWordBack removes the word before the caret.
+//
+// The text area's own delete-word goes back to the nearest space, which on a
+// branch name is the whole thing: ctrl+backspace at the end of
+// `fix/1234-order-workspace-issue` took all of it, when what was wanted was
+// `issue`. Punctuation is a boundary as much as a space is — that is what
+// every editor and every browser text box does — so a word here is a run of
+// letters, digits and underscores, or a run of the punctuation between two of
+// them, whichever the caret is sitting behind.
+//
+// It is done by handing the text area that many plain backspaces rather than
+// by rewriting its value, so the caret, the wrapping and the undo state stay
+// its own business.
+func (i *Input) deleteWordBack() {
+	before := i.beforeCursor()
+	n := wordBackLen(before)
+	if n == 0 {
+		// Nothing before the caret on this row: the thing behind it is the
+		// line break, and one backspace joins the rows the way it would.
+		n = 1
+	}
+	for ; n > 0; n-- {
+		i.ta, _ = i.ta.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+}
+
+// beforeCursor and afterCursor are the text on the caret's own row, on either
+// side of it. The text area keeps its buffer private, so the row comes from
+// Line and the column from LineInfo, whose StartColumn and ColumnOffset add up
+// to it whether the row is wrapped or not.
+func (i *Input) beforeCursor() []rune {
+	line, col := i.caret()
+	return line[:col]
+}
+
+func (i *Input) afterCursor() []rune {
+	line, col := i.caret()
+	return line[col:]
+}
+
+func (i *Input) caret() ([]rune, int) {
+	rows := strings.Split(i.ta.Value(), "\n")
+	r := i.ta.Line()
+	if r < 0 || r >= len(rows) {
+		return nil, 0
+	}
+	li := i.ta.LineInfo()
+	col := li.StartColumn + li.ColumnOffset
+	line := []rune(rows[r])
+	if col > len(line) {
+		col = len(line)
+	}
+	if col < 0 {
+		col = 0
+	}
+	return line, col
+}
+
+// wordBackLen is how many runes ctrl+backspace should take off the end of rs:
+// any trailing whitespace, and then one run — of word runes, or of the
+// punctuation that separates them, but never both.
+func wordBackLen(rs []rune) int {
+	n := 0
+	for n < len(rs) && unicode.IsSpace(rs[len(rs)-1-n]) {
+		n++
+	}
+	if n == len(rs) {
+		return n // whitespace all the way back
+	}
+	word := isWordRune(rs[len(rs)-1-n])
+	for n < len(rs) {
+		r := rs[len(rs)-1-n]
+		if unicode.IsSpace(r) || isWordRune(r) != word {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// isWordRune is what counts as part of a word: letters, digits and the
+// underscore. Everything else — the slashes and dashes in a branch name, the
+// dots in a filename, the brackets in a call — is a boundary.
+func isWordRune(r rune) bool {
+	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 func (i *Input) View() string {

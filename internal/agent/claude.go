@@ -75,12 +75,44 @@ func (c *Claude) args(opts RunOptions) []string {
 	if opts.Model != DefaultModel {
 		a = append(a, "--model", opts.Model)
 	}
+	if opts.Effort != DefaultEffort {
+		a = append(a, "--effort", opts.Effort)
+	}
 	if opts.SessionID != "" {
 		a = append(a, "--resume", opts.SessionID)
 	}
 	return a
 }
 
+// ClaudeArgsForTest exposes the command line a run would use, so a test can
+// check a flag reaches it without spawning the CLI and spending money.
+func ClaudeArgsForTest(c *Claude, opts RunOptions) []string { return c.args(opts) }
+
 func (c *Claude) Run(ctx context.Context, opts RunOptions) (<-chan Event, error) {
 	return runCLI(ctx, c.bin, c.args(opts), opts.Dir, c.extraEnv, &ClaudeParser{})
+}
+
+// Efforts are the levels `claude --effort` accepts, measured from the CLI's own
+// help (2.1.259): an unknown value is not an error, it is a warning and the
+// default. Least first, so the picker reads as a dial.
+func (c *Claude) Efforts() []string {
+	return []string{DefaultEffort, "low", "medium", "high", "xhigh", "max"}
+}
+
+func (c *Claude) DescribeEffort(level string) string {
+	switch level {
+	case DefaultEffort:
+		return "whatever the CLI is configured to use"
+	case "low":
+		return "fewest tokens — subagents, and work that is mostly mechanical"
+	case "medium":
+		return "the step down from high, where quality holds"
+	case "high":
+		return "the CLI's own default; the usual balance of quality and spend"
+	case "xhigh":
+		return "for coding and long agentic runs, at more tokens than high"
+	case "max":
+		return "when being right matters more than what it costs"
+	}
+	return ""
 }

@@ -243,3 +243,50 @@ func TestABackendWithoutTheModeIsUnchanged(t *testing.T) {
 		t.Fatal("and now it is over")
 	}
 }
+
+// A subagent outliving the turn that launched it is the whole point of
+// backgrounding one. When the process is held open, the end of a turn must
+// not sweep its background work away — doing so made agents vanish from the
+// sidebar, the hub's counts, and the background list the moment a turn
+// finished.
+func TestBackgroundWorkSurvivesTheTurnThatLaunchedIt(t *testing.T) {
+	a, s, _ := streamApp(t)
+	a.resize(120, 26)
+	send(t, a, "go and audit the triggers")
+	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "running", Type: "general-purpose", Desc: "audit"})
+	s.noteTask(&agent.TaskUpdate{ID: "b1", Status: "running", Type: "local_bash", Desc: "npx vitest run"})
+
+	result(t, a, s) // the turn ends; the subagent keeps going
+	if s.busy {
+		t.Fatal("the turn is over")
+	}
+	if sh, ag := s.Background(); sh != 1 || ag != 1 {
+		t.Fatalf("Background() = %d shells, %d agents — the work is still running", sh, ag)
+	}
+	if !strings.Contains(stripSGR(a.View()), "1 shell · 1 agent") {
+		t.Fatalf("the hub should still count it:\n%s", stripSGR(a.statusLine()))
+	}
+	// Few enough are running to list, so the walk carries their rows.
+	c := NewControls(s)
+	onWalk := 0
+	for _, chip := range c.chips {
+		if chip.kind == controlAgent {
+			onWalk++
+		}
+	}
+	if onWalk != 2 {
+		t.Fatalf("the walk should still carry both subagents' rows, got %d of %d chips", onWalk, len(c.chips))
+	}
+
+	// The CLI saying so is what ends it.
+	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "completed"})
+	if _, ag := s.Background(); ag != 0 {
+		t.Fatalf("agents = %d after the CLI reported it done", ag)
+	}
+
+	// So does the process going away, since nothing is left to run it.
+	s.closeConv()
+	if s.RunningTasks() != 0 {
+		t.Fatalf("tasks = %+v, want none counted once the process is gone", s.tasks)
+	}
+}

@@ -196,6 +196,9 @@ func TestCompactSummarisesThenStartsFresh(t *testing.T) {
 	if !strings.Contains(s.tl.Content(), "compacted") {
 		t.Fatalf("the conversation should say what happened:\n%s", s.tl.Content())
 	}
+	if !strings.Contains(s.tl.Content(), "make a file") {
+		t.Fatalf("the transcript is crema's; folding the agent's conversation must not wipe it:\n%s", s.tl.Content())
+	}
 
 	// The summary opens the next turn, so the new session is not cold.
 	pump(t, a, send(t, a, "carry on"))

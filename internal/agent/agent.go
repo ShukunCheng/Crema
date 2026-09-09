@@ -19,11 +19,14 @@ const (
 	KindError                  // non-fatal error surfaced mid-stream
 	KindReady                  // the backend's opening report about itself
 	KindTask                   // a background task's lifecycle: subagents and backgrounded commands
+	KindControl                // the CLI's answer to a control request sent down its stdin
+	KindTaskList               // the CLI's whole list of backgrounded commands; one it dropped has ended
+	KindUser                   // something said to the agent; only a subagent transcript produces these
 )
 
 type Event struct {
 	Kind     Kind
-	Text     string      // KindText, KindError
+	Text     string      // KindText, KindError, KindUser
 	Thinking bool        // KindText only
 	Tool     *ToolCall   // KindToolCall
 	Output   *ToolOutput // KindToolOutput
@@ -41,6 +44,12 @@ type Event struct {
 	SubID string
 	// Task is a background task's lifecycle update. KindTask only.
 	Task *TaskUpdate
+	// Control is the CLI's reply to a control request. KindControl only.
+	Control *ControlReply
+	// Tasks is the CLI's current list of backgrounded commands. KindTaskList
+	// only. Measured (2.1.250): sent when one starts and when the list
+	// empties, listing task_id, task_type and description.
+	Tasks []TaskUpdate
 }
 
 // TaskUpdate is one report about a background task — a subagent the model
@@ -59,6 +68,22 @@ type TaskUpdate struct {
 	ToolUses   int
 	OutputFile string // where the CLI wrote the task's full output
 	Summary    string // the task's own closing words
+	// Started is when crema first heard of it. The CLI does not say when a
+	// task began, and the first word about one is close enough to count from.
+	Started time.Time
+	// Ended is when it stopped running, set by whoever noticed. A row that
+	// has just failed is kept on screen for a moment afterwards, the way the
+	// CLI's own subagent panel keeps one.
+	Ended time.Time
+	// SpawnDepth is how far down the tree it is: 1 for a subagent the main
+	// agent launched, 2 for one that subagent launched. The CLI sends it on
+	// task_started and caps the tree at three.
+	SpawnDepth int
+	// Backgrounded is whether the task runs behind the turn rather than
+	// holding it. The CLI's background_tasks_changed list is the truth about
+	// those — a backgrounded task it no longer lists has ended — and says
+	// nothing about a foreground subagent, which is never on it.
+	Backgrounded bool
 }
 
 type ToolCall struct {
@@ -182,6 +207,29 @@ type RunOptions struct {
 	SessionID  string // "" = new session; else resume
 	Permission PermissionMode
 	Model      string // "" = the CLI's configured default
+	Effort     string // "" = the CLI's configured default
+}
+
+// DefaultEffort means "whatever the CLI is already configured to use".
+const DefaultEffort = ""
+
+// EffortChooser is a backend that can be told how hard to think about a turn.
+//
+// Effort is worth reaching for because it is the only lever on the half of the
+// bill that caching cannot touch. Measured over this machine's own calls,
+// output is 8.6% of what a turn costs on Opus 5 and 25% on Fable 5.1, where
+// thinking is always on and cannot be switched off — and every one of those
+// tokens is billed at the highest rate on the price list. Cheaper models are
+// the other answer, but a lower effort on a better model is usually the one
+// that keeps the quality.
+//
+// Optional: a backend that has no such setting simply isn't asked.
+type EffortChooser interface {
+	// Efforts lists the levels this backend accepts, least first.
+	// DefaultEffort is always the first entry.
+	Efforts() []string
+	// DescribeEffort says what a level is for, for the picker.
+	DescribeEffort(level string) string
 }
 
 // ModelDescriber is a backend that can say what its model aliases resolve to

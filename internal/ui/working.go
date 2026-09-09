@@ -56,9 +56,10 @@ func shortCount(n int64) string {
 // evidence: a tool call means that tool is running, and prose means it is
 // writing the answer.
 func (s *Session) noteActivity(ev agent.Event) {
-	if ev.Kind != agent.KindTurnEnd {
+	if ev.Kind != agent.KindTurnEnd && ev.Kind != agent.KindControl {
 		// Anything the backend sent mid-turn counts as the turn having said
 		// something — the silent-turn notice keys off this staying at zero.
+		// A control reply is crema being answered, not the turn speaking.
 		s.turnEvents++
 	}
 	act := ""

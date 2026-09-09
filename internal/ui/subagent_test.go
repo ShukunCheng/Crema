@@ -218,35 +218,46 @@ func TestTheHubCountsBackgroundWork(t *testing.T) {
 	}
 }
 
-// ↓ opens the button row, which grows a background button while there is
-// background work; picking a row shows what that task has been doing.
+// When there is too much running to list, ↓ finds one stop for it — the
+// counts — and enter opens the list, where enter shows what a task has been
+// doing and x stops it.
 func TestTheBackgroundButtonShowsATask(t *testing.T) {
 	a := testApp(t)
 	a.resize(140, 26)
 	s := a.cur()
-	s.noteTask(&agent.TaskUpdate{ID: "b1", Status: "running", Type: "local_bash",
-		Desc: "npx vitest run", LastTool: "Bash", Tokens: 15062})
+	for i := 0; i < maxRosterRows; i++ { // one more than the roster will list
+		s.noteTask(&agent.TaskUpdate{ID: "b" + itoa(i), Status: "running", Type: "local_bash",
+			Desc: "npx vitest run " + itoa(i), LastTool: "Bash", Tokens: 15062})
+	}
+	if s.rosterShown() {
+		t.Fatal("this many is the counts case, not the rows case")
+	}
 
 	c := openControls(t, a)
-	if len(c.chips) != 3 || c.chips[2].kind != controlBackground {
-		t.Fatalf("the row should carry a background button: %+v", c.chips)
+	bg := c.chips[len(c.chips)-1]
+	if len(c.chips) != 4 || bg.kind != controlBackground {
+		t.Fatalf("the walk should be model, permissions, effort, background: %+v", c.chips)
 	}
-	if c.chips[2].value != "1 shell" {
-		t.Fatalf("button reads %q", c.chips[2].value)
+	if bg.value != "6 shells" {
+		t.Fatalf("button reads %q", bg.value)
 	}
-	rows := c.chips[2].rows()
-	if len(rows) != 1 || !strings.Contains(rows[0], "shell") || !strings.Contains(rows[0], "npx vitest run") {
+	rows := bg.rows()
+	if len(rows) != 6 || !strings.Contains(rows[0], "shell") || !strings.Contains(rows[0], "npx vitest run 0") {
 		t.Fatalf("rows = %q", rows)
 	}
 	if !strings.Contains(rows[0], "now: Bash") || !strings.Contains(rows[0], "15k tokens") {
 		t.Fatalf("a row should say what it is doing: %q", rows[0])
 	}
 
-	a.Update(kmsg(tea.KeyRight)) // model -> permissions
-	a.Update(kmsg(tea.KeyRight)) // -> background
+	for c.Kind() != controlBackground { // past the hub's own values
+		a.Update(kmsg(tea.KeyRight))
+	}
 	a.Update(kmsg(tea.KeyEnter)) // open its list
+	if !strings.Contains(stripSGR(a.View()), "enter view · x stop") {
+		t.Fatal("the list should say both things it can do")
+	}
 	a.Update(kmsg(tea.KeyEnter)) // take the first row
-	if got := lastBlock(s); !strings.Contains(got, "npx vitest run") {
+	if got := lastBlock(s); !strings.Contains(got, "npx vitest run 0") {
 		t.Fatalf("picking one should show what it has been up to:\n%s", got)
 	}
 	if s.busy {
@@ -258,10 +269,50 @@ func TestTheBackgroundButtonShowsATask(t *testing.T) {
 func TestNoBackgroundNoButton(t *testing.T) {
 	a := testApp(t)
 	c := openControls(t, a)
-	if len(c.chips) != 2 {
-		t.Fatalf("chips = %d, want just model and permissions", len(c.chips))
+	if len(c.chips) != 3 {
+		t.Fatalf("chips = %d, want just the hub's own values — model, permissions, effort", len(c.chips))
 	}
 	if strings.Contains(stripSGR(a.statusLine()), "to see") {
 		t.Fatal("and the hub says nothing about background work")
+	}
+}
+
+// An agent whose subagent is still working is not idle, whatever its own
+// turn is doing. The sidebar used to read "idle +2", contradicting itself.
+func TestAnAgentWithSubagentsIsNotIdle(t *testing.T) {
+	a := threeAgents(t)
+	s := a.sessions[1]
+	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "running", Type: "general-purpose", Desc: "audit"})
+	s.noteTask(&agent.TaskUpdate{ID: "a2", Status: "running", Type: "general-purpose", Desc: "tests"})
+
+	row := func() string {
+		return strings.Split(stripSGR(RenderSidebar(a.sessions, a.active, noDrag, "*", SidebarWidth-2, 10)), "\n")[SidebarRowOf(1)]
+	}
+	got := row()
+	if strings.Contains(got, "idle") {
+		t.Fatalf("its subagents are working: %q", got)
+	}
+	if !strings.Contains(got, "+2") {
+		t.Fatalf("and the row should say how many: %q", got)
+	}
+	if !a.anyBusy() {
+		t.Fatal("the spinner must keep ticking while background work runs")
+	}
+
+	// Its own turn running as well reads as both.
+	s.busy = true
+	if got := row(); strings.Contains(got, "idle") || !strings.Contains(got, "+2") {
+		t.Fatalf("busy with subagents: %q", got)
+	}
+
+	// Everything done, and it is idle again.
+	s.busy = false
+	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "completed"})
+	s.noteTask(&agent.TaskUpdate{ID: "a2", Status: "completed"})
+	if got := row(); !strings.Contains(got, "idle") {
+		t.Fatalf("nothing running now: %q", got)
+	}
+	if a.anyBusy() {
+		t.Fatal("and the spinner can stop")
 	}
 }
