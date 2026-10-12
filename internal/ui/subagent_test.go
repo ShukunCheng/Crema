@@ -185,8 +185,13 @@ func TestTasksDoNotOutliveTheirRun(t *testing.T) {
 	if s.RunningTasks() != 0 {
 		t.Fatalf("nothing is left to run it: %+v", s.tasks)
 	}
-	if len(s.tasks) != 1 || !strings.Contains(s.tasks[0].Status, "ended") {
+	if len(s.tasks) != 1 || s.tasks[0].Status != "stopped" {
 		t.Fatalf("and /tasks should still say what became of it: %+v", s.tasks)
+	}
+	// The reason is the point: a subagent does not stop on its own when the
+	// process it lives in goes away, so the account has to name what did it.
+	if got := s.tasks[0].Why; !strings.Contains(got, "process") {
+		t.Fatalf("it should say why it stopped, got %q", got)
 	}
 }
 

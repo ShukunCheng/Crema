@@ -113,8 +113,20 @@ type Timeline struct {
 	// status is the working line drawn while a turn runs, and pending are the
 	// messages typed during it — both after the conversation, in the order
 	// they are going to happen.
+	//
+	// They are drawn under the viewport rather than inside it, and that is a
+	// performance decision rather than a visual one. The working line carries
+	// a spinner, so it changes ten times a second; putting it in the content
+	// meant handing the viewport the whole transcript ten times a second, and
+	// viewport.SetContent re-splits every line and re-measures each one's
+	// width through an ANSI parser. Measured on a 4,000-block conversation
+	// that was 8ms a frame, per agent — 320ms of every second on four agents,
+	// all of it in front of the next keystroke.
 	status  string
 	pending []string
+	// height is the pane's own height. The viewport gets what is left after
+	// the status and the waiting messages have taken their rows.
+	height int
 
 	// Selection lives here rather than in the terminal: mouse reporting is
 	// all-or-nothing for the whole window, so the only way to let a plain drag
@@ -125,7 +137,7 @@ type Timeline struct {
 func NewTimeline(w, h int) *Timeline {
 	vp := viewport.New(max(1, w), max(1, h))
 	vp.Style = base() // paint the theme behind the empty rows too
-	return &Timeline{vp: vp, width: max(1, w), follow: true}
+	return &Timeline{vp: vp, width: max(1, w), height: max(1, h), follow: true}
 }
 
 func (t *Timeline) SetSize(w, h int) {
@@ -134,8 +146,28 @@ func (t *Timeline) SetSize(w, h int) {
 		t.width = w
 		t.renderAll()
 	}
-	t.vp.Width, t.vp.Height = w, h
+	t.width, t.height = w, h
+	t.vp.Width = w
+	t.fitHeight()
 	t.sync()
+}
+
+// tailRows is how many rows the status line and the waiting messages take off
+// the bottom of the pane.
+func (t *Timeline) tailRows() int { return t.statusRows() + len(t.pending) }
+
+// fitHeight gives the viewport what is left. It is called whenever the tail
+// changes, which is the one thing that can resize it without the frame doing
+// so — and it never touches the content, which is the point.
+func (t *Timeline) fitHeight() {
+	h := max(1, t.height-t.tailRows())
+	if h == t.vp.Height {
+		return
+	}
+	t.vp.Height = h
+	if t.follow {
+		t.vp.GotoBottom()
+	}
 }
 
 // Width and Height are the pane this timeline was last sized to, so a second
@@ -308,12 +340,24 @@ func (t *Timeline) AppendEvent(ev agent.Event) {
 // after it. A queued message belongs at the end of the transcript because that
 // is where it is going to land — it is the next thing in the conversation, not
 // a box floating over one.
+// Content is the conversation. The working line and the messages waiting
+// behind it are not part of it — they are drawn under the viewport, and what
+// is in here is what can be scrolled, searched and selected.
 func (t *Timeline) Content() string {
-	body := strings.Join(t.rendered, "") + t.status
-	for _, p := range t.pending {
-		body += renderPending(p, t.width)
+	return strings.Join(t.rendered, "")
+}
+
+// tailView is the rows drawn under the conversation: the working line, then
+// anything waiting to be sent, in the order they are going to happen.
+func (t *Timeline) tailView() []string {
+	var out []string
+	if t.status != "" {
+		out = append(out, strings.TrimRight(t.status, "\n"))
 	}
-	return body
+	for _, p := range t.pending {
+		out = append(out, strings.TrimRight(renderPending(p, t.width), "\n"))
+	}
+	return out
 }
 
 // SetStatus replaces the working line drawn under the conversation, empty when
@@ -324,7 +368,7 @@ func (t *Timeline) SetStatus(line string) {
 		return
 	}
 	t.status = line
-	t.sync()
+	t.fitHeight() // the content is untouched; only the room for it changed
 }
 
 // statusRows is 1 while the working line is up, and the offset between the
@@ -348,7 +392,7 @@ func (t *Timeline) SetPending(msgs []string) {
 		}
 	}
 	t.pending = append(t.pending[:0], msgs...)
-	t.sync()
+	t.fitHeight()
 }
 
 // blockLines is how many lines the conversation itself takes, which is where
@@ -360,14 +404,20 @@ func (t *Timeline) blockLines() (n int) {
 	return n
 }
 
-// PendingAt maps a content line to the waiting message drawn on it, or -1.
-func (t *Timeline) PendingAt(contentLine int) int {
-	i := contentLine - t.blockLines() - t.statusRows()
+// PendingAtRow maps a row of the pane to the waiting message drawn on it, or
+// -1. The tail sits under the viewport, so it is the last rows of the pane
+// that hold it however far the conversation is scrolled.
+func (t *Timeline) PendingAtRow(row int) int {
+	i := row - t.vp.Height - t.statusRows()
 	if i < 0 || i >= len(t.pending) {
 		return -1
 	}
 	return i
 }
+
+// InTail reports whether a row of the pane belongs to the status line or the
+// waiting messages rather than to the conversation.
+func (t *Timeline) InTail(row int) bool { return row >= t.vp.Height }
 
 func (t *Timeline) sync() {
 	t.vp.SetContent(t.highlighted())
@@ -396,7 +446,13 @@ func (t *Timeline) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-func (t *Timeline) View() string { return t.vp.View() }
+func (t *Timeline) View() string {
+	tail := t.tailView()
+	if len(tail) == 0 {
+		return t.vp.View()
+	}
+	return t.vp.View() + "\n" + strings.Join(tail, "\n")
+}
 
 // YOffset is the first content line currently visible, for hit-testing.
 func (t *Timeline) YOffset() int { return t.vp.YOffset }

@@ -109,3 +109,39 @@ func TestRenderToolShowsAnEditAsADiff(t *testing.T) {
 		t.Fatalf("the change should be:\n%s", out)
 	}
 }
+
+// A markdown file the agent writes — a PR body, a doc — is shown as the
+// document it will be, not as a column of green "+" lines: every line of a
+// new file is an addition, so the diff said nothing, and what is worth
+// reading is how it comes out.
+func TestAWrittenMarkdownFileIsShownRendered(t *testing.T) {
+	in := `{"file_path":"D:/tmp/pr-body.md","content":"## Summary\n\nFixes **three** defects in ` + "`useOrders`" + `.\n\n- first\n- second\n\n| File | Change |\n|---|---|\n| a.ts | seeded |"}`
+	got := stripSGR(renderEdit("Write", in, 80))
+	for _, want := range []string{
+		`D:/tmp/pr-body.md · written, shown rendered`,
+		"Summary", "Fixes three defects in  useOrders .", "• first", "• second",
+		"File", "seeded", "│", // the table is drawn as a table
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q:\n%s", want, got)
+		}
+	}
+	for _, gone := range []string{"+ ", "## ", "**", "|---|"} {
+		if strings.Contains(got, gone) {
+			t.Fatalf("%q is diff or markdown syntax and should not show:\n%s", gone, got)
+		}
+	}
+}
+
+// Everything else keeps its diff: a markdown file that is edited, where what
+// changed is the point, and a written file that is not markdown.
+func TestOnlyAWrittenMarkdownFileIsRendered(t *testing.T) {
+	edit := stripSGR(renderEdit("Edit", `{"file_path":"README.md","old_string":"**old**","new_string":"**new**"}`, 60))
+	if !strings.Contains(edit, "- **old**") || !strings.Contains(edit, "+ **new**") {
+		t.Fatalf("an edit to markdown is still a diff:\n%s", edit)
+	}
+	code := stripSGR(renderEdit("Write", `{"file_path":"main.go","content":"# not a heading"}`, 60))
+	if !strings.Contains(code, "+ # not a heading") {
+		t.Fatalf("a written .go file is still a diff:\n%s", code)
+	}
+}

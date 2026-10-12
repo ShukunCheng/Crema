@@ -48,7 +48,7 @@ func taskLabel(tk agent.TaskUpdate) string {
 	if kind == "local_bash" {
 		kind = "shell"
 	}
-	l := kind + " · " + tk.Desc
+	l := kind + " · " + descLine(tk.Desc)
 	if tk.Tokens > 0 {
 		l += fmt.Sprintf(" · %s tokens", shortCount(tk.Tokens))
 	}

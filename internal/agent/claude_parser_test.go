@@ -37,15 +37,15 @@ func kinds(evs []Event) []Kind {
 func TestClaudeSmokeFixture(t *testing.T) {
 	p := &ClaudeParser{}
 	evs := parseFixture(t, p, "testdata/claude_smoke.jsonl")
-	// the empty thinking block is dropped → text, turnend only
-	want := []Kind{KindText, KindTurnEnd}
+	// the empty thinking block is dropped → text, the allowance, turnend
+	want := []Kind{KindText, KindRate, KindTurnEnd}
 	if len(evs) != len(want) {
 		t.Fatalf("got %d events %v, want %v", len(evs), kinds(evs), want)
 	}
 	if evs[0].Text != "OK" {
 		t.Fatalf("text = %q", evs[0].Text)
 	}
-	r := evs[1].Result
+	r := evs[2].Result
 	if r == nil || r.SessionID != "988f2fb1-09f3-40fc-b3ff-14edfeba92a4" ||
 		r.CostUSD != 0.293986 || r.DurationMS != 7557 || r.Err != "" {
 		t.Fatalf("bad TurnResult: %+v", r)
@@ -249,12 +249,14 @@ func TestASecondResultReportsOnlyTheGrowth(t *testing.T) {
 
 // The rate_limit_event's unifiedWindows carries every window with its
 // percentage — the line here is a real capture. Both windows must come out
-// Known, and the event's own status sticks to the window it names.
+// Known, and the event's own status sticks to the window it names. They are
+// reported the moment the line arrives, and again on the turn's result.
 func TestUnifiedWindowsCarryBothPercentages(t *testing.T) {
 	p := &ClaudeParser{}
 	ev := `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1787768400,"rateLimitType":"five_hour","overageStatus":"rejected","unifiedWindows":{"five_hour":{"utilization":0.53,"resetsAt":1787768400},"seven_day":{"utilization":0.31,"resetsAt":1788253200}}}}`
-	if evs := p.ParseLine([]byte(ev)); len(evs) != 0 {
-		t.Fatalf("the event itself is silent: %+v", evs)
+	evs := p.ParseLine([]byte(ev))
+	if len(evs) != 1 || evs[0].Kind != KindRate || len(evs[0].Rates) != 2 || evs[0].Rates[0].Utilization != 0.53 {
+		t.Fatalf("the event should report both windows at once: %+v", evs)
 	}
 	res := p.ParseLine([]byte(`{"type":"result","subtype":"success","total_cost_usd":0.01}`))
 	rl := res[0].Result.RateLimits

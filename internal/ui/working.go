@@ -3,8 +3,10 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ShukunCheng/Crema/internal/agent"
+	"github.com/ShukunCheng/Crema/internal/crlog"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -55,6 +57,52 @@ func shortCount(n int64) string {
 // backends do not announce what they are up to, so the last event is the
 // evidence: a tool call means that tool is running, and prose means it is
 // writing the answer.
+// resumeTurnIfWorking marks the agent busy again when its own main agent starts
+// working without a message having been sent — the CLI continuing a turn once
+// the background work it was waiting on is done. It reports whether it did.
+//
+// Found in crema's own log: one agent finished nine subagents over eighteen
+// minutes, launching and collecting them, with no turn start and no turn end
+// anywhere in that window. It was working the whole time, and whenever no
+// subagent happened to be running at that instant, the sidebar called it idle.
+//
+// Only the main agent's own work counts. A subagent's streamed events carry the
+// id of the tool call that launched it, and a subagent working is already what
+// the running count is for — it is not the main agent picking back up.
+func (s *Session) resumeTurnIfWorking(ev agent.Event) bool {
+	if s.busy || ev.SubID != "" {
+		return false
+	}
+	switch ev.Kind {
+	case agent.KindText, agent.KindToolCall, agent.KindToolOutput:
+	default:
+		return false
+	}
+	s.busy = true
+	s.turnStart = time.Now()
+	s.activity, s.turnOut, s.turnEvents = "continuing", 0, 0
+	s.canceled = false
+	crlog.Log("turn.resume", "agent", s.ID, "running_tasks", s.RunningTasks(),
+		"first", kindName(ev))
+	return true
+}
+
+// kindName is an event kind as the log wants to read it.
+func kindName(ev agent.Event) string {
+	switch ev.Kind {
+	case agent.KindText:
+		if ev.Thinking {
+			return "thinking"
+		}
+		return "text"
+	case agent.KindToolCall:
+		return "tool_call"
+	case agent.KindToolOutput:
+		return "tool_output"
+	}
+	return "other"
+}
+
 func (s *Session) noteActivity(ev agent.Event) {
 	if ev.Kind != agent.KindTurnEnd && ev.Kind != agent.KindControl {
 		// Anything the backend sent mid-turn counts as the turn having said

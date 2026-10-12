@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -352,5 +354,31 @@ func TestTheHeartbeatKeepsIdleGaugesFresh(t *testing.T) {
 	_ = a.View()
 	if !s.limitsAt.After(was) {
 		t.Fatal("a frame after the refresh interval should re-read the allowance")
+	}
+}
+
+// The CLI reports the allowance once, near the start of a turn. Crema used to
+// hold that until the turn's result line, so on a long turn the gauges showed
+// the previous turn's numbers the whole way through. It shows them the moment
+// they arrive now — and writes them down for every other agent — without
+// taking the report as a sign that the agent has started working.
+func TestTheAllowanceShowsTheMomentItArrives(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("APPDATA", cfg) // where RecordUsage writes, kept out of the real one
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	a := testApp(t)
+	s := a.cur()
+	reset := time.Now().Add(3 * time.Hour)
+	a.Update(agentEventMsg{sess: s.ID, seq: s.streamSeq, ev: agent.Event{Kind: agent.KindRate,
+		Rates: []agent.RateLimit{{Type: "five_hour", Utilization: 0.42, Known: true, ResetsAt: reset}}}})
+	if len(s.limits) != 1 || s.limits[0].Utilization != 0.42 {
+		t.Fatalf("the gauge should show the new figure at once: %+v", s.limits)
+	}
+	if s.busy {
+		t.Fatal("a report about the allowance is not the agent at work")
+	}
+	b, err := os.ReadFile(filepath.Join(cfg, "crema", "usage.json"))
+	if err != nil || !strings.Contains(string(b), "0.42") {
+		t.Fatalf("and it should be written down for the other agents: %v %s", err, b)
 	}
 }

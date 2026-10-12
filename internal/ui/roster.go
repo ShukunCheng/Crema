@@ -94,14 +94,14 @@ func (s *Session) roster() []rosterRow {
 		if name == "local_bash" {
 			name = "shell"
 		}
-		what := t.Desc
+		what := descLine(t.Desc)
 		if t.LastTool != "" {
 			what = t.LastTool + ": " + what
 		}
 		if gone {
 			what = t.Status
 			if t.Desc != "" {
-				what = t.Status + " · " + t.Desc
+				what = t.Status + " · " + descLine(t.Desc)
 			}
 		}
 		var d time.Duration
@@ -134,6 +134,21 @@ func (s *Session) RosterHeight() int {
 		return 0
 	}
 	return len(s.roster())
+}
+
+// descLine is a task's description as one row. A shell's description is its
+// command, and a command can be a whole script — a heredoc writing a file,
+// a loop — so drawn as it came, every line of it became a row under the
+// status bar and pushed the rest of the screen out of the way. The first line
+// says what it is; a trailing … says there is more.
+func descLine(d string) string {
+	d = strings.TrimSpace(d)
+	first, rest, more := strings.Cut(d, "\n")
+	first = strings.Join(strings.Fields(first), " ")
+	if more && strings.TrimSpace(rest) != "" {
+		first += " …"
+	}
+	return first
 }
 
 // rosterName is what goes in the name column, indented by how far down the
@@ -223,7 +238,9 @@ func rosterLine(w, nameW int, r rosterRow, _ bool) string {
 	whatW := w - 3 - nameW - 1 - numW - 1
 	text := " " + mark + pad(clip(rosterName(r), nameW), nameW)
 	if whatW > 4 {
-		text += " " + pad(clip(r.what, whatW), whatW)
+		// Whatever put the text here, a row is one row: the main agent's own
+		// activity can be a multi-line command just as a shell's can.
+		text += " " + pad(clip(descLine(r.what), whatW), whatW)
 	}
 	if numW > 0 {
 		text += " " + nums

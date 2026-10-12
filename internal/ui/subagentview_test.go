@@ -71,6 +71,9 @@ func TestEnterOnASubagentOpensItsOwnConversation(t *testing.T) {
 	if a.viewing != "a1" {
 		t.Fatalf("enter on the row should open it, viewing = %q", a.viewing)
 	}
+	// Enter asks for an immediate poll, which reads in the background so the
+	// keyboard never waits on the disk. A test runs that poll by hand.
+	s.pollSubagents()
 	view := stripSGR(a.View())
 	for _, want := range []string{
 		"Explore",                             // the header says whose conversation this is

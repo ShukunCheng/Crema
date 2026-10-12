@@ -23,6 +23,10 @@ type Theme struct {
 	UserBg lipgloss.Color
 	AddBg  lipgloss.Color
 	DelBg  lipgloss.Color
+	// CodeBg is the grey behind code in an answer: inline `code` and fenced
+	// blocks. Neutral rather than tinted, and apart from UserBg, so code never
+	// reads as something you typed.
+	CodeBg lipgloss.Color
 	// Track is the unfilled part of a status-bar gauge: a shade off Surface,
 	// so the bar reads as a bar even at 0%.
 	Track lipgloss.Color
@@ -108,6 +112,7 @@ var DarkTheme = Theme{
 	UserBg:  lipgloss.Color("#2b2733"),
 	AddBg:   lipgloss.Color("#16341f"),
 	DelBg:   lipgloss.Color("#3b1a23"),
+	CodeBg:  lipgloss.Color("#34323a"),
 	Track:   lipgloss.Color("#3b3049"),
 }
 
@@ -128,6 +133,7 @@ var LightTheme = Theme{
 	UserBg:  lipgloss.Color("#eceaf2"),
 	AddBg:   lipgloss.Color("#d8f5e0"),
 	DelBg:   lipgloss.Color("#fbdde3"),
+	CodeBg:  lipgloss.Color("#e6e4e9"),
 	Track:   lipgloss.Color("#cdc0dd"),
 }
 

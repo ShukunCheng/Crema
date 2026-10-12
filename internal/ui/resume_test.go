@@ -3,85 +3,70 @@ package ui
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ShukunCheng/Crema/internal/agent"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
-// withSessions is a mock backend that also lists saved conversations, the way
-// Claude Code does.
-type withSessions struct{ *agent.Mock }
-
-func (withSessions) Sessions(string) []agent.SessionInfo {
-	return []agent.SessionInfo{
-		{ID: "22222222-fresh", When: time.Now().Add(-5 * time.Minute), Preview: "add dark mode"},
-		{ID: "11111111-old", When: time.Now().Add(-2 * time.Hour), Preview: "fix the login bug"},
-	}
-}
-
-func resumeApp(t *testing.T) *App {
-	t.Helper()
-	a := testApp(t)
-	a.cur().Backend = withSessions{agent.NewMock()}
-	return a
-}
-
-// /resume lists the project's conversations newest first and puts them in the
-// option picker; picking one points the agent at it.
-func TestResumeListsAndAttaches(t *testing.T) {
-	a := resumeApp(t)
-	s := a.cur()
-	s.agentSID = "11111111-old"
-	send(t, a, "/resume")
-	got := lastBlock(s)
-	for _, want := range []string{"22222222", "5m ago", "add dark mode", "11111111", "the one this agent is on"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("the list is missing %q:\n%s", want, got)
-		}
-	}
-	if a.choices == nil {
-		t.Fatal("the conversations should be in the option picker")
-	}
-
-	press(t, a, kmsg(tea.KeyEnter)) // the newest is first
-	if s.agentSID != "22222222-fresh" {
-		t.Fatalf("agentSID = %q", s.agentSID)
-	}
-	if !strings.Contains(lastBlock(s), "add dark mode") {
-		t.Fatalf("the attach should say what it attached to: %q", lastBlock(s))
-	}
+// The sequence from crema's own log: the turn ends leaving subagents running,
+// the last one finishes, and the CLI picks the turn back up on its own to read
+// the results — no message sent. The agent is working, and it used to show as
+// idle, because busy was only ever set by a message you sent.
+func TestAResumedTurnIsNotIdle(t *testing.T) {
+	a, s, _ := streamApp(t)
+	send(t, a, "fan out a review")
+	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "running", Type: "general-purpose"})
+	result(t, a, s) // the turn ends, the subagent still going
 	if s.busy {
-		t.Fatal("attaching costs no turn — the next message does the resuming")
+		t.Fatal("the turn should be over")
 	}
-	if s.ctxTokens != 0 {
-		t.Fatal("the old conversation's size does not describe the new one")
+	if s.RunningTasks() != 1 {
+		t.Fatal("with the subagent still running")
 	}
+
+	// The subagent finishes. For a moment nothing is running at all.
+	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "completed"})
+	if !sidebarSays(a, "idle") {
+		t.Fatal("between the two, idle is honestly what it is")
+	}
+
+	// And the CLI carries on by itself, reading what came back.
+	say(t, a, s, "the review found three problems")
+	if !s.busy {
+		t.Fatal("the agent is speaking; it is working, not idle")
+	}
+	if sidebarSays(a, "idle") {
+		t.Fatal("the sidebar must not call a working agent idle")
+	}
+
+	// The resumed leg ends like any other turn.
+	result(t, a, s)
+	if s.busy {
+		t.Fatal("and when it finishes, it is idle again")
+	}
+	s.close()
 }
 
-func TestResumeByPrefixAndItsRefusals(t *testing.T) {
-	a := resumeApp(t)
-	s := a.cur()
-	send(t, a, "/resume 1111")
-	if s.agentSID != "11111111-old" {
-		t.Fatalf("agentSID = %q", s.agentSID)
+// A subagent's own events stream through the main agent's process, tagged with
+// the tool call that launched it. That is the subagent working, which the
+// running count already shows — it is not the main agent picking back up.
+func TestASubagentsEventsDoNotResumeTheTurn(t *testing.T) {
+	a, s, _ := streamApp(t)
+	send(t, a, "fan out")
+	s.noteTask(&agent.TaskUpdate{ID: "a1", Status: "running", Type: "Explore"})
+	result(t, a, s)
+
+	a.Update(agentEventMsg{sess: s.ID, seq: s.streamSeq,
+		ev: agent.Event{Kind: agent.KindToolCall, SubID: "toolu_launch",
+			Tool: &agent.ToolCall{Name: "Grep"}}})
+	if s.busy {
+		t.Fatal("a subagent's tool call is not the main agent resuming")
 	}
-	send(t, a, "/resume 1111")
-	if !strings.Contains(a.note, "already on") {
-		t.Fatalf("note = %q", a.note)
-	}
-	send(t, a, "/resume zzz")
-	if !strings.Contains(a.note, "matches no saved conversation") {
-		t.Fatalf("note = %q", a.note)
-	}
+	s.close()
 }
 
-// A backend that keeps its conversations to itself gets an honest refusal,
-// not an empty list.
-func TestResumeOnABackendWithoutSavedSessions(t *testing.T) {
-	a := testApp(t)
-	send(t, a, "/resume")
-	if !strings.Contains(a.note, "does not keep conversations") {
-		t.Fatalf("note = %q", a.note)
-	}
+// sidebarSays reports whether the sidebar row for the focused agent reads with
+// the given word.
+func sidebarSays(a *App, word string) bool {
+	a.resize(140, 30)
+	return strings.Contains(stripSGR(RenderSidebar(a.sessions, a.active, noDrag, "*", 30, 20)), word)
 }

@@ -1,0 +1,1455 @@
+# Crema in depth
+
+The full reference: every key and click, what each part of the screen means,
+and why crema behaves the way it does — including the measurements behind its
+choices. New to crema? Start with the [README](../README.md).
+
+- [Keys](#keys)
+- [Mouse](#mouse)
+- [Selecting text](#selecting-text)
+- [The diff — ctrl+t, or the buttons on its own header](#the-diff--ctrlt-or-the-buttons-on-its-own-header)
+  - [Full screen](#full-screen)
+  - [Finding something in it — ctrl+f](#finding-something-in-it--ctrlf)
+- [What the status bar tells you](#what-the-status-bar-tells-you)
+  - [Where the context and usage numbers come from](#where-the-context-and-usage-numbers-come-from)
+  - [The status-line bridge — real usage percentages](#the-status-line-bridge--real-usage-percentages)
+- [Multiple agents](#multiple-agents)
+- [Memory between runs](#memory-between-runs)
+- [Themes](#themes)
+- [Flags](#flags)
+- [What crema costs, and why](#what-crema-costs-and-why)
+- [How it works](#how-it-works)
+- [Completing names — / and @](#completing-names---and-)
+- [The CLI's own commands — /clear, /compact, /model](#the-clis-own-commands--clear-compact-model)
+- [Showing the agent a picture](#showing-the-agent-a-picture)
+- [What you asked before — ↑](#what-you-asked-before--)
+- [While it works](#while-it-works)
+- [Typing while it works](#typing-while-it-works)
+- [When the agent asks you something](#when-the-agent-asks-you-something)
+- [Permissions and model — ctrl+p](#permissions-and-model--ctrlp)
+- [Signing in — /login, /logout, /whoami](#signing-in--login-logout-whoami)
+- [Why it stopped](#why-it-stopped)
+- [Crema's own log — /log](#cremas-own-log--log)
+- [When a turn stops without finishing](#when-a-turn-stops-without-finishing)
+- [When a turn comes back empty](#when-a-turn-comes-back-empty)
+- [Truncation policy](#truncation-policy)
+- [Troubleshooting](#troubleshooting)
+
+## Keys
+
+| Key | Action |
+|---|---|
+| `enter` | send the message to the focused agent — from any pane, once something is written; while the agent works, the message waits in line instead of being refused |
+| `shift+enter` / `ctrl+enter` / `alt+enter` / `ctrl+j` | newline — the box grows with the draft, up to six rows |
+| paste | multi-line text lands whole; its newlines don't send |
+| `ctrl+v` | paste — a copied **image** attaches as `[Image #1]` |
+| `ctrl+backspace` | delete the word before the cursor. A word ends at punctuation, not only at a space, so on `fix/1234-order-workspace-issue` it takes `issue` rather than the whole branch name |
+| `ctrl+←` / `ctrl+→` | move the cursor a word at a time, by that same rule — so walking through a branch name stops at every part of it, and what `ctrl+←` walks past is exactly what `ctrl+backspace` would take. `alt+←` / `alt+→` and `alt+b` / `alt+f` do the same |
+| `/` (at the start of the input) | list the agent's slash commands and skills |
+| `@` (anywhere in the input) | list the project's files |
+| `↑↓` (with either list open) | move through the matches |
+| `tab` / `enter` (with either list open) | take the highlighted name and move on |
+| `esc` | close the list, or cancel the focused agent's turn — which also drops whatever was waiting behind it |
+| `ctrl+n` | new agent — pick a backend, then browse to a working directory |
+| `ctrl+w` | close the focused agent — or click the `×` on any agent's row (closing the last one quits) |
+| `ctrl+↓` / `ctrl+↑` | next / previous agent, wrapping at both ends. `tab` used to do this and now belongs to the completion lists alone — it was the one key that both took a suggestion and moved you to another project, which is a lot to ask of a key you press while typing a path |
+| `alt+1` … `alt+9` | jump straight to that agent |
+| `ctrl+b` | show/hide the agent sidebar |
+| `↑` (from the input) | walk back through what you have asked this agent; `↓` scrolls forward again — a multi-line entry doesn't interrupt the walk, and typing anything ends it |
+| `↓` (at the end of the history) | step into the hub: the model first, then the permission mode, then the effort, then what is running — the agent's own row, then each subagent. `↑` walks back and off the front returns to the input; `enter` opens a value, opens a subagent's own conversation, or with the crowd case opens the list; `x` stops a task |
+| `↓` (with the conversation or the diff focused) | back to the message box — pgdn and the wheel scroll the pane. The next `↓` walks on from there. In the diff's file list, `↓` still moves down the list |
+| `esc` (in a subagent's conversation) | back to the agent's own; nothing is stopped |
+| `ctrl+x` `ctrl+k` | stop every background subagent of the focused agent — asked for twice within three seconds, like the CLI |
+| `ctrl+p` | the same buttons, from anywhere |
+| drag in the conversation, the diff or the message box | select text; copies to the clipboard on release, and `ctrl+c` copies it again |
+| `shift+←` / `shift+→` (in the message box) | select a character at a time; `ctrl+shift+←` / `ctrl+shift+→` a word at a time, by the same rule `ctrl+backspace` uses. `shift+home` / `shift+end` select to the ends of the row, `shift+↑` / `shift+↓` a row at a time, `ctrl+shift+home` / `ctrl+shift+end` to the ends of the draft. Pressing on extends from where the selection started; a plain arrow drops it |
+| `shift` + click (in the conversation, the diff or the message box) | carry the selection there on to the click, and copy it — select a start, shift+click an end |
+| `ctrl+a` (in the message box) | select the whole draft. Typing then replaces it and `backspace` deletes it, the way a text box works — `home` still goes to the start of the line |
+| `shift` + wheel over the diff | scroll it sideways. A terminal that reports a sideways wheel of its own needs no `shift` |
+| double-click in the conversation, the diff or the message box | select the word under the pointer, and copy it. A word ends at punctuation, so double-clicking `app` in `internal/ui/app.go` gives `app` — the same rule `ctrl+backspace` uses. On a tool or file header the second click still folds it back, because a header is a button |
+| `ctrl+t` | cycle the diff: hidden → beside the conversation → full screen (or click the buttons on its header) |
+| `ctrl+f` | find in the diff (`/` too, when the diff has the focus) — shows it if it was hidden |
+| `ctrl+l` | switch between light and dark |
+| `ctrl+r` | refresh the diff and the command list now |
+| `ctrl+o` | move focus: input → timeline → diff |
+| `pgup` / `pgdn` / `home` / `end` | scroll the focused pane |
+| `←` / `→` (with the diff focused) | slide the diff sideways — a diff line is as wide as the code is, and the pane is a column. `home` comes back to the left as well as the top |
+| `ctrl+c` | copy the selected text |
+| `ctrl+q` | quit |
+
+Typing anywhere goes into the message box — if the focus was on the conversation
+or the diff, the first character takes it back. Movement keys and shortcuts stay
+with whatever is focused.
+
+`shift+enter`, `ctrl+enter` and `ctrl+backspace` reach crema by a side door.
+The Windows console reader hands over a plain enter and a plain backspace with
+the modifier discarded, so when one arrives crema asks the OS whether shift or
+control is actually held and rewrites the key. The shift question is only asked
+about an enter, and only when control wasn't already the answer, so an ordinary
+keystroke costs nothing extra. Terminals that encode those keys themselves send
+`^J` and `^H`, which are bound directly, and `shift+enter` is bound by name for
+the ones that report it.
+
+Enter carries the most weight of any key — the same keystroke is a send, a
+chord's newline, or one character of a paste the console is replaying — so
+every enter goes through a single judgment, and `/keytest` opens a picker of
+scenarios that each put a set of facts to that judgment and print the verdict
+and the reason. Two details keep real sends from vanishing. A quick tap can be
+over before a busy frame gets around to reading it, and "is the key down right
+now" would say no and file the send as a pasted newline; crema instead asks
+the OS whether enter was pressed *at any point since it last asked*, which a
+replay never trips. And a written draft plus enter sends from any pane — it
+used to be silently ignored after a click into the conversation, which read as
+the agent not answering.
+
+Panes drop away as the terminal narrows so crema stays usable at 80×24: the diff
+pane needs 124 columns, the sidebar needs 70. Above those floors `ctrl+t` and
+`ctrl+b` decide. When the sidebar is hidden, the status bar still shows which
+agent you're on, e.g. `Claude Code [2/3]`.
+
+Crema also checks the window's size for itself. The console announces a
+resize as an input event, and on Windows that event names the screen buffer
+rather than the visible window; if it is ever missed or wrong, crema would
+keep drawing for a window that is no longer there. So four times a second it
+asks the console how big the window really is — one cheap system call, and
+nothing happens while the answer matches the layout — and when the two
+disagree twice running it resizes to the real size. Each correction, and any
+resize whose report disagreed with the window, is written to `/log` as
+`ui.resize.corrected` or `ui.resize.mismatch`.
+
+## Mouse
+
+The whole interface is clickable:
+
+| Click | Action |
+|---|---|
+| an agent in the sidebar | switch to it |
+| the same agent twice | rename it — the command lands in the input box, filled in |
+| drag an agent up or down the sidebar | reorder the list |
+| the `×` at the end of its row | close that agent (closing the last one quits) |
+| `+ new agent` | open the picker |
+| the `[ dark ]` / `[ light ]` chip in the status bar | switch theme |
+| the `side` / `full` / `off` buttons on the diff's header | put the diff at that size |
+| the `[ diff ]` chip in the status bar (only while it's hidden) | bring the diff back |
+| the `[ PR #123 ]` chip in the status bar | open the branch's pull request in the browser |
+| a row in the picker or in a completion list | choose it |
+| a message waiting in the queue | take it back into the input box |
+| in the message box | put the caret there; drag to select, double-click for a word |
+| the model, permission mode or background count in the status bar | open that value's list |
+| a row of the running work under the status bar | put the walk on it — `enter` then talks to it, `x` stops it |
+| any pane | focus it (so `pgup`/`pgdn` go there) |
+| a URL in the conversation | open it in the browser — links render underlined; a drag across one still selects |
+| a tool block's header line | fold or unfold that block |
+| `shift` + wheel over the diff | scroll it sideways |
+| a file's header line in the diff | fold or unfold that file |
+| a file in the full-screen list | show that file's diff |
+| drag in the conversation or the diff | select text, copied on release (see below) |
+| double-click in the conversation or the diff | select the word under the pointer and copy it |
+| scroll wheel | scrolls whichever pane is under the pointer, focused or not |
+
+An open block shows `▾ Bash` and the whole thing under it. What arrives folded:
+
+| | |
+|---|---|
+| open | the agent's prose, file edits (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, codex's `apply_patch`), and any tool that **failed** |
+| folded | every other tool call, ordinary tool output, thinking, and a subagent's prose |
+| as a diff | an edit is drawn as the change it makes — removed lines on a red band, added lines on a green one, shared lines as context — rather than as the JSON arguments describing it |
+| rendered | a markdown file the agent **writes** (`.md`, `.markdown`, `.mdx`) — a PR body, a doc — is shown as the document it will be, headings, lists, tables and all, under its path and `· written, shown rendered`. A new file is all additions, so a diff of it said nothing. An **edit** to a markdown file stays a diff, since there what changed is the point |
+
+**A run of folded blocks is one line.** A turn that runs three commands is three
+calls and three outputs — six rows of `▸ …` saying nothing. Neighbouring folded
+blocks are summarised together instead, in grey, by what they did rather than
+by what is hidden:
+
+```
+▸ Ran 2 shell commands · Read 1 file
+```
+
+Clicking it opens the whole run at once, never a summary of it — and
+clicking any block of the opened run folds the whole run back, so the gesture
+round-trips instead of leaving the call folded and its output standing.
+Blocks that arrived open — a file edit, a failure — fold alone when clicked;
+they were never part of the run beside them. Anything that
+stays open — prose, a file change, a failure — breaks the run in two, so the
+line always describes exactly the stretch it sits in.
+
+**A subagent's work folds under its own name.** The model can hand work to a
+subagent, and everything that subagent does streams through crema tagged as
+its — tools, thinking, and its report alike fold into a line of their own:
+
+```
+▸ subagent · Ran 3 shell commands · Thought twice · Reported back
+```
+
+One click opens all of it, so checking a subagent's work is the same gesture
+as checking anything else's. Its prose folds too — it reported to the model,
+not to you, and the main conversation carries what came of it — but its file
+edits and failures arrive open, because a turn is judged by what it changed,
+whoever in it did the changing. A subagent's run never merges with the main
+turn's: the summary line says whose work it stands for.
+
+**While work is in flight it gets rows of its own**, under the status bar:
+the agent itself and each subagent it handed something to, with what each is
+on now, how long it has been at it, and what it has written.
+
+```
+ ● main                     Edit                                        1m 35s · ↓ 3.4k
+ ○ general-purpose          Grep: Locating orderContextMenu render      6m 51s · ↓ 17k
+ ○ structural-completeness› Diffing PlanboardViewSwitch.test.tsx        6m 41s · ↓ 15k
+```
+
+The rows are only there while something is running — an idle agent gets its
+screen back, and the conversation gets the rows back. More than five running and the
+rows give way to the counts in the hub (the second case, below), and when the turn itself has
+finished the main row says it is waiting on the background work rather than
+showing a clock for something it is not doing. A subagent of a subagent is
+indented under it, from the `spawn_depth` the CLI puts on the `task_started`
+line, so the rows read as the tree the CLI's own panel draws.
+
+Every row is one row. A shell's description is the command it runs, and that
+can be a whole script — a heredoc, a loop — so the row shows its first line
+and ends with `…` when there is more; the same goes for the hub's list,
+`/tasks`, and the note when a task stops. The full command is still in the
+conversation, on the tool call that started it.
+
+A subagent that **succeeded** leaves the roster the instant it does: its
+answer has already arrived in the conversation. One that **failed or was
+stopped** is held for thirty seconds and its row says which — `⨯` and the
+status in place of what it was doing — because otherwise the row and the only
+mention of the failure disappear in the same frame.
+
+The status bar counts it too — `2 shells · 1 agent (↓ to see)` on the mode
+row, the way the CLI's own status line does, with shells counted apart from
+subagents because they are different things to go and look at.
+
+**The walk always starts in the same place.** `↓` from the input reaches the
+model, then the permission mode, then the effort, and only then the running
+work. Those two
+settings are what the walk is mostly for and they are there whether anything
+is running or not, so they keep their two positions; putting the roster first
+meant the number of presses to reach the model depended on how many subagents
+happened to be going at that moment.
+
+**Two cases, the CLI's two.** Up to five things running, each gets a row and
+the walk continues onto them after the settings — the agent's own row first,
+then each subagent. `x` on a row **stops** that task, and `ctrl+x` `ctrl+k`
+stops all of them, asked for twice within three seconds the way the CLI asks.
+More than five running, the rows would eat the pane, so the hub shows the
+counts alone and the walk gets one **background** stop for all of it: `enter`
+opens the list, where `enter` prints a task's own output into the conversation
+and `x` stops it.
+
+**`enter` on a subagent's row opens that subagent's own conversation**, which
+is what `enter` does on the CLI's subagent panel. The pane becomes its
+transcript — the prompt it was handed at the top, then its thinking, the
+tools it ran and their output, and its answer — with a header saying whose it
+is and `esc` to go back. It is live: while the subagent works, the pane grows
+as it writes. `esc` returns to the agent's own conversation and stops
+nothing.
+
+Crema reads that from the same place the CLI does. Every subagent writes its
+own transcript to
+`~/.claude/projects/<project>/<session id>/subagents/agent-<task id>.jsonl`,
+beside an `agent-<task id>.meta.json` naming the agent type and what it was
+asked; both halves of that path are things crema already holds, since the
+`task_id` and `session_id` arrive together on the `task_started` line and the
+`task_id` **is** the filename. Verified against 417 of these on this machine
+and against crema's own recorded captures. The file is polled twice a second
+while a subagent runs and only the bytes since the last look are read, so a
+line the CLI is halfway through writing waits rather than arriving mangled;
+the polling stops when nothing is running, so an idle crema is back to its
+ten-second heartbeat.
+
+What that replaced is the point. Until now the only way to see inside a
+subagent was to ask the main agent about it, which spends a whole turn of the
+most expensive conversation on the machine and only works if the model
+chooses to answer. Talking to one still works that way, because crema cannot
+reach a subagent's stdin — the CLI has no such door — so `enter` also
+addresses the next message to that subagent and it goes to the main agent
+with the ask to relay it by `SendMessage`, the CLI's own way of talking to
+one, with `→ general-purpose: …` in the transcript so it is plain who it was
+for. But *reading* one costs nothing now, and arrives while the work is
+happening rather than after it.
+
+Stopping is real. The CLI's stream-json stdin takes control requests —
+measured from its bundle (2.1.259): `interrupt`, `set_model`,
+`set_permission_mode`, `stop_task` among others — and `stop_task` was tried
+live: the CLI answers ok and the task stops. It then says nothing more about
+that task, so the ok reply is what marks it stopped in crema rather than a
+word that never comes. The CLI's own list of background work
+(`background_tasks_changed`) is taken as the truth about the rest: a
+backgrounded task it no longer lists has ended, however it ended, while a
+foreground subagent — never on that list — is left to its own lifecycle
+lines.
+
+While background work runs, the working line counts it — `… · 2 background
+tasks · esc to cancel` — and the sidebar carries the same count as `+2` on
+that agent's row — which stops reading `idle` while its subagents work, since
+an agent waiting on one is not idle whatever its own turn is doing — because
+the sidebar is the only place every agent is
+visible at once: an agent whose subagent is grinding away should not look
+like one thinking by itself. A task belongs to the run that launched it, so
+if the CLI exits without ever saying how one ended, it stops being counted
+rather than haunting the list. `/tasks` lists every subagent and backgrounded
+command of the session: status, what it was asked, its spend so far, and what
+it is running right now. `/tasks <id>` reads the tail of the output file the
+CLI keeps for it, so a long-running subagent can be looked in on before it
+reports. A turn that launches an async subagent also genuinely outlives its
+first result — the CLI ends the turn, then revives it when the task finishes
+— and crema follows: the turn ends when the process exits, money is counted
+once per leg, and a message you queued meanwhile waits for the real end.
+
+**The agent's markdown is drawn, not shown.** `**bold**` is bold, `*italic*`
+is italic, `` `code` `` sits in a small grey box without its backticks, and a
+`[link](url)` reads as its text with the address after it, still clickable.
+Headings stand out without their `#`s, `-` and `*` lists get `•` bullets and
+wrap under their own words, numbered lists keep their numbers, a `>` quote
+gets a bar, `---` becomes a rule, and fenced code is a grey band the width of
+the pane, shown without its fences and left exactly as written inside. The
+grey is the theme's own `CodeBg`, a neutral shade kept apart from the band
+behind your own messages, so code never reads as something you typed. Only what answers actually use is
+recognised; anything else stays as the agent wrote it, and snake_case or
+`2 * 3` is never mistaken for emphasis.
+
+**A markdown table is drawn as a table.** Plain wrapping shatters one — the
+rows are long, the wrap breaks them mid-cell, and the columns fall apart. So
+assistant prose is scanned for tables and each one is drawn: columns sized to
+the pane, a rule under the header, and a long cell wrapped inside its own
+column. Fenced code keeps its pipes, a stray `|` in prose is not a table, and
+a pane too narrow for the columns falls back to readable `a · b · c` rows
+rather than four-character confetti.
+
+Three things are painted as bands across the row rather than coloured text:
+what **you** typed, on grey, so a long conversation can be skimmed for where
+you last spoke; and the lines a change **added** and **removed**, on green and
+red. The two diff bands are the same in the conversation and in the diff pane,
+in both views and both themes — one definition, so the panes can't drift.
+
+The diff pane folds the same way and starts the same way: **files arrive
+folded**, so the pane is a list of what changed and by how much, and you click
+a file to read it. What you opened stays open across refreshes, so an agent
+writing files won't fold away what you were reading. Open files show `▾`.
+
+## Selecting text
+
+**Drag inside the conversation or the diff to select, and it copies on
+release.** No modifier, and clicking keeps working everywhere else — a press
+only becomes a selection once you move, so dragging across a tool block or a
+file header selects it instead of folding it.
+
+**In the diff, a drag through code copies code.** Start it on a line of code
+and it stays in that code: in the full-screen split view, on the side you
+started on — the old version or the new one, never both interleaved — and
+never the line-number gutters. Rows that are not code (the hunk's `@@` line,
+a file header) and rows where your side has no line are left out, so copying
+the new version of a function gives exactly that function. In the unified
+view it leaves out the `+`/`-` in front of each line. A drag that starts on a
+header selects everything it crosses, as before.
+
+Crema draws that selection itself. Mouse reporting is all-or-nothing for the
+whole terminal, so there is no way to ask for "the terminal selects in this pane
+and the app clicks in that one"; the only way to get plain-drag selection in the
+output while the sidebar stays clickable is for the app to implement it.
+Which also means it can be smarter than a raw terminal selection: the `│ ` guide
+down the side of tool blocks is decoration, so it's stripped from what you copy —
+you get `go test ./...`, not `│ go test ./...`.
+
+Both panes select the same way, and only one at a time: starting a drag in one
+drops the other's highlight, so `ctrl+c` is never ambiguous about which it
+means. In the diff you get exactly the rows and columns you dragged over — a
+path, a hunk header, the `+` line an agent just wrote — and in the split view,
+one side of the divider if that's all you crossed.
+
+`ctrl+c` copies the highlight again, which is what the reflex expects it to do —
+so it is **not** the quit key here; `ctrl+q` is. `esc` clears the highlight (and
+only then cancels a running turn, if you press it again). Clicking any other
+pane clears it too. The status bar confirms each copy.
+
+Shift+drag still works as well, and hands the job to the terminal instead —
+worth knowing for the sidebar and the status bar, which crema doesn't select
+in, and for grabbing a rectangle across both panes at once.
+
+**The message box selects too.** It was the last pane where a drag did nothing,
+and it is the one holding the thing you just wrote — so it takes the same
+gestures: drag to select, double-click for a word by the same punctuation rule
+as everywhere else, `ctrl+a` for the lot, `ctrl+c` to copy, `esc` to drop it.
+
+Being a text box rather than a transcript, a selection there is one you can
+edit: typing over it replaces it, and `backspace` deletes it. `ctrl+a` is taken
+off the text area's emacs-style line-start binding to do this; `home` still
+goes to the start of the line.
+
+What is copied is cut out of the draft rather than read back off the rows it is
+drawn on, because a wrap is not a line break — reading it off the screen put a
+newline in the middle of a sentence that never had one. That also makes copying
+and deleting agree by construction rather than by care. The text area keeps its
+buffer and its wrapping to itself, so the two things this needs — where a click
+falls in the draft, and where an offset falls on screen — come from walking its
+caret and reading its own line info at each step, which is exact and never has
+to guess at the wrap.
+
+## The diff — `ctrl+t`, or the buttons on its own header
+
+The pane carries its own title bar: what changed on the left, the three sizes
+on the right, with the one it is at picked out. Clicking one goes straight
+there; `ctrl+t` still cycles. Hidden, the pane has no header to carry them, so
+a `[ diff ]` chip appears in the status bar beside the theme one — the way back
+is never further than a click.
+
+```
+ changes  14 added 5 removed                                    side  full  off
+```
+
+The shape of the diff follows the room it has:
+
+| | |
+|---|---|
+| hidden | the conversation gets the width |
+| beside the conversation | **unified**, the way a pull request reads: one column, `+`/`−` prefixes, files folded until you click one |
+| full screen | a **browser**: the changed files down the left, the one you picked beside them |
+
+**Long lines slide rather than being cut.** A diff line is as wide as the code
+is and the pane is a column beside the conversation, so the end of a line —
+where the call arguments, the string literal and the comment are — used to be
+cut off and marked with a `›`. Now the body scrolls sideways: `shift` and the
+wheel, or `←` / `→` with the diff focused, and `home` comes back to the left
+as well as the top. A bar under the body shows how much of the width is on
+screen and where, and names the columns exactly, because in a diff the column
+is often the thing you are counting:
+
+```
+────▌▌▌▌▌▌▌▌────────────────  41-100 of 214
+```
+
+The bar is only there when there is somewhere to go, and it takes its row from
+the diff rather than from the frame. Rows are drawn at the content's own width
+and a window is cut out of them, which is what lets a selection in a scrolled
+diff take the text under the pointer rather than the text that used to be
+there. One pathological line — a minified bundle, a base64 blob — is bounded
+at 2000 columns, since every row is padded to the widest one.
+
+It is the stacked unified view that slides. Full screen puts a divider down
+the middle at a position the pane's width decides, and sliding the rendered
+rows under it would take the divider with them; there both halves are already
+sized to the frame.
+
+### Full screen
+
+```
+ changes  14 added 5 removed                                    side  full  off
+── STAGED                         │  before                │  after
+ staged.go                  +1 −0 │@@ -10,4 +10,12 @@
+── UNSTAGED                       │   10 func main() {     │   10 func main() {
+ work.go                    +1 −1 │   11     start()       │   11     start(withOptions)
+ internal/ui/app.go        +12 −4 │   12 }                 │   12 }
+```
+
+`↑↓` walk the list and the diff follows; `pgup`/`pgdn` scroll the diff itself;
+clicking a file picks it. The body drops the section and file headers the
+stacked view needs — the list has already said which file this is and what it
+gained — and shows the file **split**, the way a merge tool reads: before on
+the left, after on the right, a rewritten line showing both on one row with
+line numbers down each gutter. A line with no counterpart is drawn against a
+blank band on the other side, which is what makes it read as an insertion
+rather than as a shifted line.
+
+Searching (`ctrl+f`) moves the selection to the file the text is in, since only
+one file is on screen at a time. Below 60 columns there is no room for a list
+and a readable diff, so full screen falls back to the stacked view, and the
+split gives way to unified below 49.
+
+Added is green and removed is red everywhere the two are counted or drawn: the
+lines themselves, the file headers, and the list.
+
+Full screen means the whole frame: the sidebar and conversation stand aside and
+the focus moves to the diff. Typing anything takes the focus back to the
+message box.
+
+### Finding something in it — `ctrl+f`
+
+A diff is the one pane you arrive at already knowing what you're looking for:
+the function you renamed, the file you meant to leave alone. `ctrl+f` opens a
+find box on the last row of the pane (`/` does the same when the diff has the
+focus), and shows the diff first if it was hidden — asking to search something
+invisible is asking to see it.
+
+```
+find allocate▌                          3/7  ↑↓ move · esc close
+```
+
+Every match is marked as you type, the current one picked out from the rest;
+`↑↓` (or `enter`) steps through them, wrapping at both ends, and the pane
+scrolls to keep the current one a third of the way down. `esc` closes the box.
+
+**It searches the whole diff, not just what's on screen.** Files arrive folded,
+so a search that only read the visible rows would confidently find nothing;
+crema opens the files the text is in and counts what's in them. Narrowing the
+query closes again what a shorter prefix had opened — typing `new` passes
+through `n`, which matches nearly everything — and a file *you* opened is
+yours: the search never folds it. Whatever it found stays open when you close
+the box, since finding it was the point.
+
+A path is as findable as a line, both views search the same way, and a
+background refresh keeps the highlight live, so a file the agent touches while
+you're looking joins the results on its own.
+
+## What the status bar tells you
+
+Three rows, in the shape a shell prompt HUD uses — a dim label, a bright value,
+groups fenced off with `│`. The gauges are drawn as coloured blocks; they're
+sketched here with `█` and `░` because a README has no colour:
+
+```
+ ● Claude Code [1/2] │ [opus] │ D:\Crema git:(main* +43 −61 ?8) │ 12.5s │ $0.4231
+ Context ██░░░░░░░░ 21% │ 5h █░░░░░░░░░ 13% (resets in 1h 51m) │ 7d ███░░░░░░░ 27% (resets in 3d 5h)
+ ▸▸ full access (ctrl+p to change)                              [◨ side][ dark  ]
+```
+
+**Who and where.** The focused agent (with `[1/2]` when several are open), its
+model, the working directory, and that directory's git state: branch, `*` when
+it's dirty, then the lines added and removed and the files git isn't tracking.
+
+**The branch's pull request.** When `gh` knows the current branch has one, a
+`[ PR #123 ]` chip joins the buttons on the mode row — green while open, muted
+`draft`, purple `merged`, red `closed` — and clicking it opens the PR in the
+browser. The answer comes from `gh pr view` run in the agent's directory (gh
+holds the auth; crema never touches a credential), cached per branch and
+re-asked every few minutes, so the bar never blocks on the network and GitHub
+is asked rarely. No `gh`, no repo, or no PR simply means no chip.
+While a turn runs the spinner replaces the `●` and the timer counts up; spend
+so far sits at the end.
+
+**What's running out.** How full the model's context window is, then each of
+the subscription's allowance windows with a countdown to reset. A bar is filled
+by proportion and coloured by how alarming it is — green, then yellow past 60%,
+then red past 85% — because that is the only thing the colour of a gauge should
+ever mean. A number nobody reported is never invented: an unknown context draws
+an empty track and a dash, and an allowance window with no percentage shows its
+name and its reset with no bar at all. See [where those numbers come
+from](#where-the-context-and-usage-numbers-come-from) — both were wrong until
+they were measured.
+
+**What it may do.** The permission mode, the transient note (what was copied,
+what's queued, what failed), and the two buttons: the diff's size, and the
+theme.
+
+A terminal under 16 rows can't spare three rows of chrome, so it gives up the
+gauge row — the two percentages move up to the first row rather than
+disappearing.
+
+### Where the context and usage numbers come from
+
+Both of these read plausibly and were wrong, so both were measured against a
+real account on Claude Code 2.1.229.
+
+**Context** is not the turn's token bill. A turn is one bill but many API
+calls, and every call re-reads the whole conversation, so the `usage` on the
+`result` line — which is what crema used to read — counts the conversation once
+per call. A measured three-call turn billed 73,420 input tokens against a
+conversation that was 41,922 tokens long: 37% of the window claimed, 21% real,
+and the gap widens with every tool call. What actually fills the window is the
+**last** call's input, and every `assistant` message carries the usage of the
+call that produced it. Crema keeps the last one.
+
+**The usage percentages ride the stream after all** — in a place that took
+three CLI versions to find. The `rate_limit_event`'s top-level `utilization`
+field is gone, and `~/.claude/.usage_cache.json` is an older version's cache
+that nothing writes any more (crema still reads it, honouring each window's
+`resets_at` as a freshness test, but expects nothing). What newer CLIs send
+instead is the event's **`unifiedWindows`** object: every window at once,
+percentage and reset time included, once per turn, near its start. Crema
+applies it the moment it arrives — it used to wait for the turn's result line,
+so on a half-hour turn the gauges showed the previous turn's numbers for the
+whole half hour — and writes it into the same file the status-line bridge writes, merged window by
+window, so every agent and the next run start from the freshest numbers
+anyone has seen. A window whose reset time has passed is dropped everywhere
+rather than shown stale: one minute after a reset, "94% used" is a lie.
+
+Two smaller sources still help:
+
+- Once a window is far enough along, the CLI also sends
+  `surpassedThreshold` — a floor rather than a figure — shown as
+  `5h over 75%` when no percentage is known.
+- The **status-line bridge** below keeps the numbers moving between turns,
+  from your interactive sessions' renders. An idle crema re-reads them on a
+  ten-second heartbeat, so the gauges and their reset countdowns move without
+  waiting for a keystroke.
+
+Codex reports neither figure, so both segments are simply absent for Codex
+agents rather than guessed at.
+
+### The status-line bridge — real usage percentages
+
+Claude Code *does* know the live allowance: it hands the numbers to your
+**status-line program** on every render, which is where tools like claude-hud
+get `Usage 87%`. A headless run has no status line, so crema is never told. But
+crema can stand in front of yours:
+
+Copy your current status line into a file of its own — say
+`~/.claude/hud-statusline.sh`, byte for byte — and point crema at it:
+
+```jsonc
+// ~/.claude/settings.json
+"statusLine": {
+  "type": "command",
+  "command": "crema statusline --then-file \"C:/Users/you/.claude/hud-statusline.sh\""
+}
+```
+
+A file rather than an inline `--then "<command>"`, because a status line is a
+shell one-liner carrying its own quoting — the one in the wild nests single
+quotes inside single quotes to feed `awk` — and escaping that into a second
+command line is exactly how you break somebody's status bar. A path has no
+quoting for crema to get wrong. (`--then` is still there for something simple
+enough to inline.)
+
+`crema statusline` reads the payload, writes the allowance to
+`%APPDATA%\crema\usage.json`, and runs your real status line with the same
+input on stdin — so what you see in an interactive session is unchanged. Every
+crema then shows the percentage those sessions were told, gauge and all. With
+no `--then-file` it records silently and prints nothing, which is only what you
+want if you had no status line to begin with.
+
+It is the CLI's own figure passing through. **Nothing in it reads a credential
+or calls an API** — crema will not go asking the usage endpoint itself, because
+that would mean handling your login, which is the one thing it promises not to
+do.
+
+Every window the payload carries gets the same treatment as the context gauge:
+a filled bar, a percentage, and when it resets — the five-hour one and the
+weekly one side by side. Crema re-reads the record every ten seconds while it
+sits there, so the bars follow your interactive sessions rather than waiting
+for a turn to end.
+
+The record expires the same way the CLI's cache does: a window past its
+`resets_at` is dropped rather than shown stale, so if you stop running
+interactive sessions the percentages fade out and the countdowns come back. The
+bridge can never break your status line — whatever happens to the recording,
+your command still runs and its output still goes through.
+
+## Multiple agents
+
+`ctrl+n` opens a two-step picker: choose a backend, then browse to the folder
+that agent should work in. The browser is plain terminal UI rather than a native
+dialog, so it still works over SSH — `↑↓` to move, `enter` to open a folder,
+`←` to go up, and the `[ use this directory ]` row to accept the current one.
+
+Because each agent owns a directory, giving two agents separate projects (or
+separate clones) keeps their edits from colliding. Pointing two agents at the
+same directory is allowed, but they will overwrite each other's work without
+warning — crema does not arbitrate.
+
+**Double-click a row to rename it.** Three agents on one project all read
+`claude · Crema`; what tells them apart is what each is for, which only you
+know. There is no text field in the sidebar, so the rename lands in the box you
+already type in — `/rename web` with the current name filled in, ready to edit.
+`/rename` on its own gives the agent its derived name back. Names are saved
+with everything else.
+
+**Drag a row to reorder the list.** The order is yours — `alt+1`…`alt+9` jump
+by position and `tab` walks it, so which agent is first is a decision about how
+you work rather than about when you happened to open it. The row in hand
+follows the mouse: it is painted lifted — the user band behind it, a `▌` grab
+mark in the margin — and the move happens live as the pointer crosses rows, so
+the list under the cursor is always the list you will get. Dragged past either
+end it rides at that end rather than being dropped, and the landing is
+announced once, on release. The row moves as the
+pointer crosses another one, so the list under the cursor is always the list
+you will get, and the order is saved with everything else. Dragging the `×`
+does nothing: that button closes.
+
+The sidebar lists every open agent with its live state, so you can see at a
+glance which ones are still working:
+
+```
+╭──────────────────────╮
+│AGENTS                │
+│▸ 1 claude · api  ⣾ 7s│
+│  2 codex · web   idle│
+│  3 claude · docs ⣷12s│
+│                      │
+│+ new agent  ^n       │
+╰──────────────────────╯
+```
+
+## Memory between runs
+
+Crema remembers your open agents. Quit with three agents going and the next
+launch brings all three back — same backends, same directories, same
+conversations, and each one continues its *agent* session too, so Claude Code or
+Codex still has the context you built up rather than starting cold.
+
+Spend, permission mode, model, and how full the context window was come back
+with each agent. The context figure is only restored alongside a session id
+that will actually be resumed: without one the next turn starts empty, whatever
+the last one measured. Your theme choice is remembered as well.
+
+The usage windows are deliberately *not* remembered — see [where those numbers
+come from](#where-the-context-and-usage-numbers-come-from). A percentage from
+last week is worse than no percentage.
+
+State lives in `state.json` under your user config directory
+(`%APPDATA%\crema\` on Windows, `~/.config/crema/` elsewhere), written with
+owner-only permissions because saved conversations and tool output can contain
+anything from your repositories. It is written atomically after every finished
+turn, so a crash costs you at most the turn in flight.
+
+To skip restoring and start with a single fresh agent:
+
+```
+crema --fresh
+```
+
+Naming `--dir` or `--agent` explicitly still restores everything and then
+focuses (or opens) the one you named.
+
+Two bounds keep the file small, and both announce themselves in the restored
+conversation rather than quietly losing history: the last 300 entries per agent
+are kept, and any single entry over 20,000 characters is cut with a counted
+marker. Agents whose directory has since been deleted are skipped with a visible
+reason instead of silently vanishing.
+
+## Themes
+
+Crema ships a pink/purple palette in both light and dark. It picks one by asking
+your terminal about its background at startup; override with `--theme light` or
+`--theme dark`.
+
+Both themes paint their own background across the whole screen rather than
+letting your terminal's show through, so dark mode is genuinely dark even in a
+light terminal — and stays readable either way.
+
+Crema also asks the terminal to adopt the theme background as its default
+(OSC 11), so the emulator's own window padding matches instead of framing a dark
+theme in white, and hands the color back on exit. Terminals that don't implement
+that sequence ignore it; if yours does and crema is killed rather than quit, a
+new tab clears it.
+
+To switch while running, click the chip at the right end of the status bar or
+press `ctrl+l`. The chip always shows the current mode and is the last thing the
+status bar gives up as the terminal narrows, so it stays reachable:
+
+```
+ ● Claude Code · full access · $0.14 · +12 −3       D:\my-project [ dark  ]
+                                                                  ^ click me
+```
+
+## Flags
+
+```
+crema [--agent claude|codex|mock] [--dir PATH] [--model NAME]
+      [--permission-mode default|plan|acceptEdits|full]
+      [--theme auto|light|dark] [--window auto|own|share]
+      [--fresh] [--doctor] [--version]
+
+crema statusline [--then-file <path>]   # the usage bridge, above
+```
+
+`--agent` and `--dir` set up the first agent; everything after that is `ctrl+n`.
+
+## What crema costs, and why
+
+Crema bills more than the same work done in the CLI's own terminal, and the
+reason is structural: **one turn is one process**. Headless mode takes a
+prompt, answers it, and exits, so every message you send starts a fresh
+`claude -p --resume` that rebuilds the conversation from the transcript. A
+live interactive session never puts its context down.
+
+Measured across 92 crema turns and 65 interactive ones on one machine: the
+first API call of a crema turn rewrote **59%** of its cached prefix (267k
+tokens written, 189k read); the interactive equivalent rewrote **11%** (72k
+written, 555k read). Cache writes bill at 1.25x–2x of input where reads bill
+at 0.1x, so that difference is most of the gap. It is *not* the cache
+lifetime: a subscriber's headless runs already get the same one-hour cache an
+interactive session gets — crema pins it explicitly with
+`ENABLE_PROMPT_CACHING_1H=1`, but measurement showed every cache write was
+already filed as `ephemeral_1h` before that flag existed.
+
+So crema stopped doing that. **Each agent now holds one CLI process open**
+and feeds turns to it over `--input-format stream-json` — the mode the SDK
+uses — so the context is put down once per agent instead of once per message.
+Measured live on a three-turn conversation: the second turn rewrote **81
+tokens** against 26,334 read, where the first had to establish all of it.
+
+The process is the agent's, and cancelling a turn or changing its model or
+permission mode no longer costs it: those go down the process's own stdin as
+control requests (`interrupt`, `set_model`, `set_permission_mode` — tried
+live, each answered ok, an interrupted turn ending 0.9s after the ask), so
+the conversation's cache lives on. It is let go only when holding it would be
+wrong: `/clear`, `/resume`, closing the agent, sitting idle for longer than
+the prompt cache it exists to keep warm — **and idle means idle**: a subagent
+still running is the work, not an idle process, so the hour only starts once
+the background work stops. It used to count from the message that started the
+job, which killed long reviews mid-tool-call an hour in; found in this
+machine's own transcripts, eight clusters of subagents whose last written line
+is a half-finished tool call, one of them fifty minutes into a review. The
+clock also runs from the end of a turn rather than its start, so a turn longer
+than an hour no longer leaves a process to be thrown away the instant it
+finishes with its cache seconds old. Or the CLI refusing a live switch —
+in which case the next message starts a fresh process with the setting on its
+command line, and the note says so, because that turn is a cold start. None
+of those lose the conversation — the CLI keeps the transcript, and the next
+message resumes it by id. A backend without the mode (Codex, the mock) is
+still driven a process per turn, where the exit is what ends a turn rather
+than the result line.
+
+**Size is the rest of the bill, and folding it up is yours to ask for.** With
+the caching fixed, what is left is how big the conversation has grown.
+Measured over the 11,163 API calls this machine's agents have made through
+crema, **47% of the spend was cache reads and 45% cache writes**: 92% of what
+crema costs is the conversation being carried from one turn to the next.
+Output was 7%.
+
+Both halves scale with the conversation, and so does the price of a single
+call:
+
+| conversation size | cost of one call |
+|---|---|
+| under 100k | $0.13 |
+| 200k – 300k | $0.26 |
+| 400k – 600k | $0.61 |
+| over 800k | $0.70 |
+
+The same turn costs five times as much in a full window as in a fresh one,
+and nothing about it is five times better. Two thirds of the write bill came
+from 388 calls that rewrote more than 100k tokens each — the CLI re-anchoring
+its cache mid-conversation, at 81% of the whole conversation a time. Those
+are not avoidable, but they are charged by the token like everything else, so
+halving the conversation halves them too.
+
+**Crema does not fold a conversation up on its own.** It used to: a token
+budget that fired the moment a turn ended. It was removed because on a real
+machine it fires far more often than the arithmetic suggests. The reason is
+the floor. Measured over 49 real crema sessions here, the very first API call
+of a conversation already reads a median of **66,577 tokens** — the system
+prompt, the tool schemas, `CLAUDE.md`, the memory index, the skills listing —
+before a word has been typed, and p90 is 73k. A budget counted from zero
+therefore buys a third less conversation than it says, and the fold hands
+that 66k straight back the instant it finishes. At a 200k trigger that worked
+out to a fold every **35 API calls** — ten or fifteen turns of real work —
+each one costing a turn and a chunk of what the agent knew. The saving is
+real and so is the interruption, and which of them matters is a judgement
+about the work in front of you, not one crema can make from a token count.
+
+So `/compact` is a thing you ask for, when the conversation has got long
+enough that you can feel it. `/cost` says how big it is and what it has spent
+so far, and the status bar carries the context percentage, so the moment is
+visible rather than guessed at. The CLI's own `/autocompact` still passes
+through to the CLI, which has server-side compaction of its own and triggers
+it at 150k.
+
+**Effort is the lever on the other half.** Caching is about what the agent
+reads; effort is about what it writes, and nothing about caching touches an
+output token. Measured over this machine's own calls, output is **8.6%** of
+what a turn costs on Opus 5 and **25%** on Fable 5.1 — where thinking is
+always on, cannot be switched off, and is invisible by default, so you pay for
+reasoning you never see. Fable 5.1 writes **2.2× the output tokens per session**
+that Opus 5 does at the same number of steps, at twice the price per token.
+
+So `↓` reaches an **effort** dial beside the model and the permission mode,
+and `/effort low|medium|high|xhigh|max` sets it. The CLI's own `--effort` is
+where it goes; there is no control request for it — measured against the CLI's
+bundle, which offers `set_model` and `set_permission_mode` over stdin and
+nothing for this — so changing it costs a new process and one re-read of the
+conversation. Crema says so in the transcript rather than leaving it to be
+found in the bill. `high` is the CLI's default; `low` is for subagents and
+mechanical work, `xhigh` for coding and long agentic runs, `max` for when
+being right matters more than what it costs. A backend without the setting is
+never offered the dial.
+
+**Crema is not slower at the work itself — it was slower to start.** Measured
+on this machine since 2026-09-01, same model on both surfaces:
+
+| | crema | interactive CLI |
+|---|---|---|
+| model time per output token | 13.7 ms | 12.0 ms |
+| tool call, median | 1.8 s | 2.0 s |
+| API calls per turn, median | 6 | 8 |
+| wall time per turn, median | 131 s | 164 s |
+| your message to the first line back | 6.7 s | 13.8 s |
+
+Where crema did lose time is in no transcript at all, because a transcript is
+written by the process after it has started. **Booting a fresh `claude` process
+took a median of 4.6 seconds** (2.8 to 9.4, across twenty-one real launches,
+measured from crema's own log against the transcripts those launches wrote),
+and the first reply of a *resumed* process took around 9 seconds against 2.5
+for a new one, since it re-reads the whole conversation cold. The interactive
+CLI pays the boot once when you open it. Crema paid it on every new
+conversation, every restart, and every setting that needs a new process.
+
+So the agent you are looking at has its process **started before you send**:
+when crema opens, when you move to an agent, and after a setting, `/clear` or
+`/compact` that closed the process. The boot is free to do early — measured
+with nothing written to its stdin, the CLI's memory settled at 226 MB within
+three seconds and its CPU went quiet, and it makes no API call until a message
+arrives — so it is over by the time you have finished typing. Only the focused
+agent is warmed, because a waiting process holds a couple of hundred megabytes;
+one nobody uses is swept after an hour like any other. The slow first reply of
+a resumed conversation is not something warming can help, since that is the
+model re-reading it. `conv.prewarm` and `conv.warm_used` go in `/log`, so
+whether it paid shows up in your own use rather than in a claim here.
+
+The one thing that is *not* worth doing is pinning the cache lifetime.
+`ENABLE_PROMPT_CACHING_1H=1` is still set, and it is still a no-op: every
+cache write on this account is already filed as `ephemeral_1h`, in
+interactive sessions that never see the variable as much as in crema's. The
+1-hour entry costs 2x input to write where a 5-minute one costs 1.25x, which
+across the sample was a $899 premium — but 94% of calls follow the one before
+them by less than a minute and only 1.9% by more than five, so a 5-minute TTL
+would have had to rewrite $375 of prefix it currently reads. The premium is
+real, the saving is smaller than it, and neither is crema's to choose.
+
+What is on screen stays on screen. The transcript is crema's, not the
+agent's: folding the agent's conversation leaves one grey line where it
+happened — `▸ compacted · the agent carries on from a summary of everything
+above`, the summary itself a click away — and the conversation above it, including the
+answer you were just reading, is still there. An earlier version cleared the
+pane and showed the summary in its place, which took the answer to your last
+message away before you had read it. A message typed during the summarising
+turn is kept too, and sent into the folded conversation.
+
+While it runs, a line at the bottom says so — `▸▸ Compacting conversation`
+with the size being folded up, how long it has taken, and what has been
+written so far. The bar beside it sweeps rather than fills: nothing reports
+progress through a compaction (the CLI knows the size before and after, and
+the second only once it is done), so a bar that crept along would be a guess
+dressed up as a measurement. It says "still going" and leaves the honest
+numbers to say the rest.
+
+## How it works
+
+| | |
+|---|---|
+| Claude Code | one process per agent: `claude -p --input-format stream-json --output-format stream-json --verbose --permission-mode bypassPermissions`, turns written to its stdin, resumed with `--resume <session_id>` when a new process is needed |
+| Codex | `codex exec --json --full-auto <prompt>`, resumed with `codex exec resume <thread_id>` |
+| Diff | `git diff --cached`, `git diff`, and `git ls-files --others --exclude-standard`, parsed in-process |
+
+Crema spawns these CLIs as subprocesses and normalizes their JSON event streams
+into one internal event type. It never stores tokens and never talks to any
+model API directly. The only CLI files it reads are the command and skill
+folders below, and it only reads them.
+
+## Completing names — `/` and `@`
+
+Two things complete in the input box, and both work the same way: the draft
+stays exactly as you typed it, nothing is written into the box until you take a
+name with `tab` or `enter`, `↑↓` moves through the matches, and `esc` closes
+the list.
+
+- **`/` at the start** lists everything the focused agent has — the commands
+  and skills on disk, the CLI's own built-ins as it reported them, and crema's
+  own (below) — in one alphabet.
+- **`@` anywhere** lists the project's files, so a file can be named in the
+  middle of a sentence: `explain @internal/ui/app.go`. Matches rank by the
+  whole path first, then by the file name, so `@app.go` finds
+  `internal/ui/app.go`.
+
+Either name goes to the CLI verbatim in the prompt, so the CLI expands it
+exactly as it would in its own interface.
+
+The file list comes from `git ls-files` — tracked files plus untracked ones
+that aren't ignored — so it is the project rather than its build output. A
+directory that isn't a repo is walked instead, skipping dot-directories and
+`node_modules`.
+
+| Backend | Where it looks |
+|---|---|
+| Claude Code | `<project>/.claude/commands/**.md`, `<project>/.claude/skills/*/SKILL.md`, the same two under `~/.claude`, and `commands/` + `skills/` in every plugin listed in `~/.claude/plugins/installed_plugins.json` |
+| Codex | `<project>/.codex/prompts/*.md` and `~/.codex/prompts/*.md` |
+
+## The CLI's own commands — `/clear`, `/compact`, `/model`
+
+`/clear` and its siblings belong to the CLIs' **interactive** interfaces. A
+headless run has no such interface, so they aren't commands there at all: they
+are short prompts the model reads, thinks about, and answers. Measured against
+a real account, `claude -p "/clear"`, `"/compact"` and `"/model"` each ran a
+full turn and cost about **$0.29** to be told nothing.
+
+So crema does them itself:
+
+| | |
+|---|---|
+| `/clear` | drop the conversation and the backend session behind it — the next message starts a run with no `--resume`, so the agent has never heard of any of it. The spend meter starts over too; `/compact` keeps its total, since the work continues |
+| `/compact` | ask the agent to summarise the conversation, then drop the agent's copy of it and put that summary in front of your next message. Two steps, one extra turn, and the new session opens knowing where the old one got to. The transcript on screen stays; a folded `▸ compacted` line marks where, with the summary behind it |
+| `/resume` | point the agent at any conversation this project has had — the CLI's own or crema's. `/resume` lists them newest first (when each last moved, how each began) in the option picker; `/resume <id>` attaches directly. Interactively this is the CLI's own session picker; headless the CLI doesn't offer it, so crema reads the same `~/.claude/projects` files the picker does |
+| `/model` | `/model opus` sets it; `/model` on its own opens the panel `↓` opens |
+| `/effort` | how hard this agent thinks — `/effort low\|medium\|high\|xhigh\|max`, or `/effort default`. `/effort` on its own opens the panel. The CLI takes this on the command line only, so changing it opens a new process and the note says so |
+| `/permissions` | the same panel |
+| `/rename` | call this agent something — `/rename api`, or `/rename` to undo |
+| `/login` | sign in — crema hands the terminal to the CLI's own login and takes it back afterwards. It never sees the credential |
+| `/logout` | sign out on this machine. One login serves every agent, so every held process of that backend is let go |
+| `/whoami` | who you are signed in as. Read off disk, so it costs nothing |
+| `/log` | crema's own diagnostic log — where it is, and the last of it. `/log 200` for more. Costs nothing: a local file, never sent to a model |
+| `/cost` | spend, context, and the usage window, in the conversation |
+| `/diff` | hidden → beside the conversation → full screen |
+| `/keytest` | why an enter sends or breaks the line — a picker of scenarios, each put to the real judgment |
+| `/tasks` | the session's subagents and backgrounded commands; `/tasks <id>` reads one's output file |
+| `/help` | crema's commands and keys |
+| `/quit`, `/exit` | close crema |
+
+Seventeen more — `/config`, `/context`, `/doctor`, `/agents`, `/mcp`, `/usage`,
+`/effort`, `/fast` and the rest of the CLI's own settings and diagnostics — get
+a straight answer in the conversation saying they don't exist headlessly,
+rather than being sent off to be charged for.
+
+**Everything else the CLI has, crema offers and sends.** The `init` message of
+every run carries the CLI's own `slash_commands` list, so crema asks rather
+than guesses: `/init`, `/security-review`, `/code-review`, `/simplify`,
+`/deep-research` and every plugin command and skill appear in the `/` list and
+go to the CLI as written. That list is remembered between runs, so `/` is
+complete from the first keystroke, and it updates itself when you install a
+plugin or the CLI ships a new command.
+
+The same list is a spellchecker: a name the CLI has never reported is a typo,
+and crema says so instead of paying for a turn to find out.
+
+A command that the backend **really has** always wins its name: if a project
+defines `.claude/commands/clear.md`, `/clear` runs it and crema stays out of
+the way.
+
+Subdirectories namespace a command the way the CLIs do — `commands/git/sync.md`
+is `/git:sync` — and plugin entries carry their plugin, e.g.
+`/honeycomb:query-patterns`. A project command shadows a user one of the same
+name, which is the order the CLIs resolve in. Each row shows the description
+from the file's front matter; the line under the list says whether the selected
+entry is a command or a skill and where it came from.
+
+Both lists are read once per agent and cached; `ctrl+r` rescans them, so a
+command or file added while crema is running is one keypress away.
+
+When an agent uses a skill, the conversation shows the `Skill` call and its
+`Launching skill: …` result, and nothing more. The CLI then writes the skill's
+whole `SKILL.md` into the conversation for the model to read, marked as its own
+(`isSynthetic` on the stream, `isMeta` in a subagent's transcript); crema leaves
+those messages out, in the main conversation and in a subagent's alike, the way
+the CLI's own screen does.
+
+## Showing the agent a picture
+
+Press `ctrl+v` with an image on the clipboard — a screenshot, something copied
+out of a browser, a file copied in Explorer — and crema attaches it:
+
+```
+❯ why is this misaligned? [Image #1]
+```
+
+The marker is for you; the agent is given the file. Crema talks to the CLIs in
+text, so it writes the picture out, stands `[Image #1]` in the draft where the
+path would be, and swaps it back on the way out — both Claude Code and Codex
+read an image when the prompt points at one. The conversation keeps the marker
+too, so the transcript reads the way the input box did. A file copied in
+Explorer is referenced where it already lives rather than copied again; a
+screenshot goes to `%TEMP%\crema-images`, never into your project.
+
+`ctrl+v` is an ordinary paste when there's no picture, so it stays useful for
+text the terminal didn't hand over itself. Three clipboard formats are read:
+the PNG a browser or screenshot tool provides (passed through untouched, alpha
+and all), the bitmap Print Screen leaves, and a copied file. Anything else —
+a palette-indexed bitmap, say — says so in the status bar rather than pasting
+something unexpected.
+
+Two caveats. **Windows Terminal keeps `ctrl+v` for itself**: it pastes the
+clipboard *text* and crema never sees the key, so image paste works in crema's
+own window (the shortcut) and not in a WT tab. And dragging a file onto a
+console window types its path in, which the agents read just as happily.
+
+## What you asked before — `↑`
+
+`↑` in the input box walks back through the messages you have sent this agent,
+newest first, and `↓` walks forward again — ending on whatever half-written
+draft the walk interrupted, rather than leaving you with an empty box. It stops
+at the oldest entry instead of wrapping round to the newest.
+
+Typing anything ends the walk and the draft is yours again, so the next `↑`
+starts from the newest once more. A draft with more than one line keeps `↑↓` as
+cursor movement, where moving between the lines is the obvious meaning; and
+because `↓` is also how you reach the buttons above the input, it only does that
+once the history is back where it started.
+
+Each agent remembers its own, capped at the last 200 entries, with consecutive
+repeats collapsed the way a shell's history does. It is saved between runs and
+it outlives `/clear`: that command is about what the agent knows, not about
+what you typed.
+
+## While it works
+
+The conversation ends with a line saying what is happening, under the last
+thing the agent said — the corner of the status bar is not where you are
+looking while you wait:
+
+```
+▸ Ran 2 shell commands · Read 1 file
+⠳ Bash… (28s · ↓ 1.2k tokens · esc to cancel)
+```
+
+Every part of it is measured rather than decorated. The verb is the last event
+that arrived — `thinking`, `writing`, the name of the tool that just started,
+`reading the result` — because neither CLI announces what it is up to and the
+stream is the only evidence there is. The clock is this turn's. The token count
+is what the backend reported writing so far, summed once per API call (one call
+arrives as several stream lines, each repeating that call's usage, so they are
+told apart by message id); a backend that reports nothing shows no count rather
+than a zero.
+
+The line disappears when the turn ends, and each agent has its own — a
+background agent is still doing something, and its conversation says so.
+
+**The keyboard never waits on a disk.** Bubbletea runs your keys, crema's
+updates and the drawing on one goroutine, so anything slow there is a moment
+where typing does not answer — which is what "I type and it takes a second to
+react" was. Two things were doing it, both measured on this machine:
+
+- **Saving.** The state file — every open agent and its conversation — was
+  written on that goroutine at the end of every turn, twice. Against the real
+  file, eight agents and 2.7 MB, one save took a mean of 113 ms and up to 219 ms
+  before Windows had even scanned the result. Now the interface only takes a
+  copy and a writer goroutine does the rest; saves asked for faster than they
+  can be written collapse to the newest, and quitting waits for the last one.
+- **Finding a subagent's transcript.** While a subagent's file had not appeared
+  yet, every half-second poll looked for it with a glob across every project
+  directory — a mean of 44 ms and up to 140 ms each, for each such subagent.
+  During a fan-out of five or six, that was a few hundred milliseconds of every
+  tick. The poll now decides what to read on the interface's goroutine, reads on
+  another, and applies the result back.
+
+Any update or frame that still takes longer than a tenth of a second writes a
+`ui.slow` line to `/log` saying what it was doing, so if another cause turns up
+it names itself rather than needing a hunt.
+
+**The working line costs nothing to animate.** It carries a spinner, so it
+changes ten times a second — and it used to be part of the content the
+conversation's viewport held, which meant handing the viewport the whole
+transcript ten times a second, for every open agent. `SetContent` re-splits
+every line and re-measures each one's width through an ANSI parser, so on a
+4,000-block conversation that was **8ms a frame, per agent**: a third of a
+second out of every second on four agents, all of it queued in front of the
+next keystroke. That was the lag.
+
+The working line and the messages waiting behind it are drawn under the
+viewport now rather than inside it, so a spinner tick changes one row and
+touches nothing else. Measured on the same conversation, the spinner's own
+path went from **8,162,680ns to 162ns**, and it no longer grows with the
+conversation at all — 68ns at 100 blocks, 151ns at 8,000. `BenchmarkSpinnerTick`
+keeps that honest, and a test asserts the shape rather than a timing, so a
+loaded machine cannot make it flaky.
+
+One visible consequence: the working line and anything queued now stay at the
+bottom of the pane when you scroll back, instead of scrolling away with the
+conversation. They are live status rather than transcript, so that is where
+they belong.
+
+## Typing while it works
+
+You don't have to wait for a turn to end. Press `enter` while the agent is
+running and the message joins the end of the conversation, dimmed and marked
+`· waiting`, on the same grey band a sent message sits on — because that is
+what it is about to be. The moment the turn finishes, the one that has waited
+longest is sent on its own, and the next after that, in the order you wrote
+them; the line stops being dim and becomes an ordinary message.
+
+Sending anything scrolls the conversation back to the bottom, whether it starts
+a turn or joins the queue. Scrolling back to read something stops the pane
+chasing new output, which is right while you are reading — but sending is the
+end of reading, and what happens next lands at the bottom. If you were looking
+at a subagent's transcript, that closes too: the answer arrives in the agent's
+own conversation, whether the message was for the agent or for the subagent it
+relays to.
+
+Click one of those lines to take it back out — it goes into the input box, where
+you can change it and send it again, and any picture attached to it comes back
+with it. A draft you are part-way through is never overwritten: the message
+stays where it is and the status bar says so, so neither one is lost. `esc`
+cancels the running turn *and* drops the queue — what you wrote expecting this
+turn to finish shouldn't fire off the moment you kill it.
+
+This is a queue and not a channel, which is the honest shape of the thing.
+Claude Code's own box behaves the same way for the same reason: `claude -p` is
+one prompt per run, and once a turn is spawned there is no way to say anything
+more to it. So crema holds your message rather than pretending it landed.
+
+## When the agent asks you something
+
+If the agent ends a turn by asking a question and listing the answers, those
+answers become a picker above the input: `↑↓` to move, `enter` to send the one
+you picked as your next message. Clicking a row does the same.
+
+It is deliberately hard to trigger — the list has to be the last thing in the
+message, two or more rows, with a question mark somewhere above it. A list the
+agent was merely talking about doesn't count, and neither does one from an
+agent you aren't looking at. Anything you type dismisses it and lands in the
+draft, so answering in your own words is always one keystroke away.
+
+This is prose that crema reads, not a protocol. Claude Code has a tool for
+this — `AskUserQuestion` — but it never offers it to a headless caller: the
+`init` message of `claude -p` lists the tools for the session, and that one
+isn't among them, in print or streaming-input mode. It belongs to the CLI's own
+interactive UI, so it cannot reach crema at all.
+
+## Permissions and model — `ctrl+p`
+
+Headless CLIs cannot show an approval prompt, so a tool that *would* ask instead
+**fails**. That is why the permission mode matters more here than in the
+interactive CLIs, and why you'll see errors like *"This command requires
+approval"* if the mode is too tight for what you asked.
+
+**Press `↓` in the input box** (or `ctrl+p`) and the two buttons above it take
+the highlight — the conversation stays where it is. `←→` moves between them,
+Nothing floats over the input to say so: **the values are highlighted where
+the hub already writes them** — the model up in the identity line, the
+permission mode and the background work down on the mode row. `↓` steps in from the
+input box and along — model, then permissions, then the background work when
+there is any — and `↑` walks back, off the front and into the input box where
+it started. At the far end `↓` does nothing rather than wrapping to a place
+you did not ask for. `enter` opens the one highlighted, and its values are drawn in
+the status bar's own place at the bottom of the frame, so the picker has room
+without covering the conversation. `esc` steps back out a layer at a time, and
+clicking a value in the hub does what selecting it does. Each agent has its
+own mode and model:
+
+| Mode | What the agent may do |
+|---|---|
+| `ask` | the CLI's own default — most tools that need approval will fail |
+| `plan` | read-only; it plans but changes nothing (Claude Code only) |
+| `edits` | file edits apply; shell commands are still blocked |
+| `full access` | **the default.** No prompts at all; the agent can run any command |
+
+**A new agent starts on `full access`,** which is a real decision and not a
+lax one. Crema drives these CLIs headlessly, and headless there is no prompt
+to approve anything at — a tool that would ask instead fails the turn. Under a
+narrower mode the agent doesn't ask you for permission, it just stops: it
+announces a plan, runs one command, and reports an error nobody was offered the
+chance to answer. That reads as a broken agent rather than a careful one. So
+crema starts where a headless coding agent can actually work and says so in the
+banner, rather than shipping a default that looks safe and behaves like a
+fault.
+
+What that costs is real too: the agent can run any command in its working
+directory. Narrow it whenever you want — the button above the input, or
+`--permission-mode acceptEdits` at startup — and it sticks to that agent between
+runs. The status bar always shows the active mode, the diff pane shows
+exactly what changed, and every mode change is written into the conversation so
+the transcript explains why a later turn could or couldn't run something. Run
+crema in a git repo with a clean tree so you can always `git checkout` back.
+
+**The model list keeps up on its own.** What crema offers are the CLI's
+*aliases* — `opus`, `fable`, `sonnet`, `haiku` — because the CLI resolves an
+alias to its current generation: `opus` meant Opus 4 when this was written and
+means Opus 5 now, with no change here. `default` goes further and passes no
+`--model` flag at all, so it follows whatever the CLI decides fresh each run
+(org policy, then `ANTHROPIC_DEFAULT_MODEL`, then your account tier). What
+that misses is a genuinely new *name* — when Fable shipped, no alias pointed
+at it — so crema also merges in the options the CLI records in
+`~/.claude.json`, with the CLI's own label and description. The merge is
+additive: that cache holds only the extras beyond the base lineup, so it can
+add a new model but never take `opus` or `haiku` away, and a missing or
+unreadable file changes nothing. A model already covered by an alias isn't
+listed twice, and the CLI's description wins over crema's built-in note —
+it names the generation, which crema cannot know.
+
+The other button picks the model. Both lists read like the CLIs' own pickers —
+numbered, the one in force ticked, and each name followed by what it gets you,
+so a number is enough to choose:
+
+```
+1. ✓ default  whatever the CLI is configured to use
+2.   opus     Opus 5 with 1M context · best for everyday, complex tasks
+3.   fable    Fable 5 · most capable for your hardest and longest-running tasks
+4.   sonnet   Sonnet 5 · efficient for routine tasks
+5.   haiku    Haiku 4.5 · fastest for quick answers
+```
+
+Those descriptions are what `/model` printed on Claude Code 2.1.229, copied
+rather than invented — a headless run is never told any of it, so crema cannot
+read it and the text can go stale when a new generation ships. What `default`
+resolves to is the CLI's own configuration, which crema is not told either, so
+it doesn't guess. A backend with nothing to say about its models just lists
+their names. Crema only offers modes and models
+the focused backend can actually honor: Codex has no read-only planning mode, so
+it isn't listed there, and Codex model choice is left to its own config because
+availability depends on your plan.
+
+Both settle at startup too, and are remembered per agent between runs:
+
+```
+crema --permission-mode acceptEdits --model opus
+```
+
+`--permission-mode` takes the CLI's own names — `default`, `plan`,
+`acceptEdits`, `full` — and applies to the first agent. Without it, every new
+agent starts on `full`.
+
+Bringing real permission prompts into the TUI (via the Claude Agent SDK
+`canUseTool` callback) is still the headline item for a later milestone.
+
+## Signing in — `/login`, `/logout`, `/whoami`
+
+Crema never sees a credential. That is the point of driving the official CLIs:
+your subscription login stays theirs, and `crema never sees an API key` is a
+promise rather than a slogan. So `/login` does not ask you for anything.
+
+The CLI's login is interactive — it opens a browser and waits — and crema holds
+the terminal, in the alt screen with the mouse captured, so there is nowhere
+for that to happen until crema lets go. `/login` lets go: it puts the terminal
+back the way the CLI expects it, runs `claude auth login`, and takes it back
+when that is done. Then it says who you are now, read from `claude auth status`
+— which reads a file rather than calling the API, so asking costs nothing.
+
+`/login` waits for a running turn to finish, because handing the terminal away
+underneath one would leave it writing to a screen that is not there. `esc`
+cancels the turn if you would rather not wait.
+
+`/logout` runs `claude auth logout`. It is not local to one agent: one login
+serves every agent in crema and every other Claude Code on the machine, so
+every held process of that backend is let go rather than left running on a
+credential that no longer works. The same happens after a successful `/login` —
+a fresh credential is no use to a process that started with the old one, and a
+cold start is cheaper than a turn that fails.
+
+`/whoami` says who you are without changing anything:
+
+```
+signed in · you@example.com · on max · via claude.ai
+Your Organization
+```
+
+A backend with no login crema can reach is simply not offered one.
+
+## Why it stopped
+
+Every turn accounts for itself, and so does every subagent. A turn that simply
+answered needs no line — the answer is the account — but anything else says
+what happened, where you are reading.
+
+**The model's own last word.** `end_turn` and `tool_use` are the ordinary
+endings. `max_tokens` means the reply ran into its length ceiling and was cut
+off mid-sentence, and `refusal` means a classifier declined; both used to look
+exactly like an ordinary ending, with a green tick under a reply that had
+simply stopped. Now they say so, and the `max_tokens` line tells you the reply
+will pick up where it stopped if you ask it to carry on.
+
+**A turn can be over while the work is not.** If subagents are still running
+when the turn ends, the conversation says so — `the turn is over but 2
+subagents are still running` — because "it stopped" and "it handed the job on
+and is waiting" look identical otherwise.
+
+**A turn the CLI picks back up by itself is a turn.** When background work an
+agent was waiting on finishes, the CLI reads the results and carries on —
+without anyone sending it anything. Crema used to mark an agent busy only when
+you sent a message, so a resumed turn ran with the agent marked idle, and in
+any moment where no subagent happened to be running the sidebar said `idle`
+beside an agent that was plainly working. Found in crema's own log: one agent
+completed nine subagents over eighteen minutes with no turn start and no turn
+end anywhere in that window. Now the main agent speaking is what starts the
+turn again — a subagent's own streamed events do not count, since the running
+count already shows those — and `turn.resume` goes in the log.
+
+**A subagent that is killed says why, in the conversation.** A subagent that
+finishes reports back through the agent; one that is killed leaves nothing at
+all, because its answer never arrived. The roster row is gone in thirty
+seconds and the question it was answering is not, so the reason goes in the
+transcript:
+
+```
+general-purpose stopped before it finished — the process had been idle for an hour
+it was on: PR review of the branch diff (51m 12s in)
+```
+
+The reason is the one crema knows and used to throw away: a subagent does not
+stop on its own when the process it lives in is closed, so the reason that
+process closed **is** the reason it stopped. `/clear`, a settings change the
+CLI would not take live, the idle sweep, the process dying — each names itself.
+A completed subagent is not a casualty and gets no such line.
+
+All of it is in `/log` too, with the counts: `turn.end` carries
+`stop_reason`, `cut_short`, `why` and `running_tasks`, so the account survives
+the session that produced it.
+
+## Crema's own log — `/log`
+
+Crema keeps a diagnostic log beside its state file, in `crema.log` under your
+config directory. It records **what crema decided, when, and why**: a process
+opened or closed and the reason, a turn started and how it ended, a subagent
+started or stopped, the idle sweep firing, a process dying and what it printed
+to stderr.
+
+**It costs no tokens.** Tokens are spent on API calls; this is a local file and
+nothing in it is ever sent to a model. The only way a log can cost anything is
+if you paste it into a message — which is also why this one records crema's own
+doing rather than what was said. The conversations are already on disk under
+`~/.claude/projects`; duplicating them here would make a file too big to read
+and too private to share.
+
+It exists because three bugs in a row were unanswerable after the fact. A
+subagent was killed and nothing recorded what killed it. A turn stopped before
+finishing and the branch that handled it said nothing at all. The CLI printed
+`Failed to authenticate` to stderr and exited, and the one sentence explaining
+it was dropped on the floor. Each time the information existed for a moment and
+was thrown away. A whole incident looks like this, and is 845 bytes:
+
+```
+{"t":"…","ev":"task.start","d":{"agent":1,"desc":"PR review","type":"general-purpose"}}
+{"t":"…","ev":"conv.idle_sweep","d":{"agent":1,"idle_min":61}}
+{"t":"…","ev":"conv.close","d":{"agent":1,"busy":false,"running_tasks":1,"why":"the process had been idle for an hour"}}
+{"t":"…","ev":"turn.end","d":{"agent":1,"cut_short":true,"secs":3620,"why":"…"}}
+```
+
+`/log` says where the file is and prints the last 40 lines into the
+conversation; `/log 200` prints more. One line is one JSON object, so `jq` and
+`grep` both work on it.
+
+Two things it will not do. It never waits on a disk — the writer is a goroutine
+behind a bounded queue, and a full queue drops the line and counts it, so a gap
+in the file is never a silent one and a busy frame is never blocked. And it is
+never a reason crema fails to start: if the file cannot be written, logging is
+off and everything else works.
+
+## When a turn stops without finishing
+
+A turn can be cut short by something other than the agent: a settings change
+that the CLI will not take on a live process, the idle sweep letting go of a
+process, `/clear`, the process itself going away. The stream reports every one
+of those the same way it reports your own `esc` — as a cancellation — so crema
+used to end the turn and say nothing at all. The answer never arrived, there
+was no error, and there was nothing to chase.
+
+Now the reason is kept where it is known, at the point the conversation is
+closed, and the transcript says it: `this turn stopped before it finished —
+the model was changed`. Your own `esc` stays quiet, because the note already
+said so and a red block for something you asked for is noise. A stop with no
+recorded reason says `its process went away`, which is at least a true
+statement about what happened and narrows the next hunt.
+
+## When a turn comes back empty
+
+A headless CLI can end a turn "successfully" having produced nothing — seen
+live when resuming a session whose previous run died mid-tool-call: a
+1.6-second success, zero tokens either way, no error. Silence is the one thing
+crema refuses to show: a turn that ends cleanly with no output of any kind gets
+a visible notice saying so, with the duration and what usually causes it. And a
+result whose subtype says the run went wrong is treated as the error it is,
+even when the CLI's is_error flag says otherwise.
+
+## Truncation policy
+
+A single tool output is capped at 4000 lines. When that happens, crema prints an
+explicit, counted label — `… +N lines truncated (crema cap 4000)`. Long diff lines
+are clipped to the pane width and marked with `›`. Crema never discards output:
+what arrives folded is all still there, one click away, and what is dropped for
+being too long says so and counts itself.
+
+## Troubleshooting
+
+- **`crema --doctor` says an agent is missing**: install its CLI and run it
+  once interactively to complete login. Crema uses whatever session that CLI
+  stores.
+- **Codex fails with "The 'gpt-5.x-codex' model is not supported when using
+  Codex with a ChatGPT account"**: that's Codex's own error, not crema's. Pick
+  a model your plan allows (`codex --model …` or `~/.codex/config.toml`) and
+  retry.
+- **The diff pane says "not a git repository"**: crema works fine, but the
+  pane needs a repo. Start crema with `--dir` pointing at one.
+- **Nothing appears for a while after sending**: the CLIs buffer their first
+  event until the model responds. The status bar timer tells you it's alive;
+  `esc` cancels.
+- **A turn stopped and you don't know why**: crema writes the reason into the
+  conversation; `/log` has the detail.

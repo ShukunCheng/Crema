@@ -137,7 +137,9 @@ func TestCancellingDropsTheQueue(t *testing.T) {
 func clickQueued(a *App, n int) {
 	tl := a.cur().tl
 	_ = a.View() // the pending rows are reconciled when the frame is drawn
-	clickPR(a, a.lay.SidebarW+2, tl.blockLines()+tl.statusRows()+n-tl.YOffset())
+	// The waiting messages are the last rows of the pane, under the viewport
+	// and under the working line.
+	clickPR(a, a.lay.SidebarW+2, tl.vp.Height+tl.statusRows()+n)
 }
 
 // Clicking a waiting message takes it back out — into the input box, which is
@@ -222,7 +224,7 @@ func TestWaitingMessagesSitAtTheEndOfTheConversation(t *testing.T) {
 	if a.dropUpHeight() != 0 {
 		t.Fatalf("the queue should not raise a box of its own: %d rows", a.dropUpHeight())
 	}
-	lines := strings.Split(strings.TrimRight(stripSGR(s.tl.Content()), "\n"), "\n")
+	lines := strings.Split(strings.TrimRight(stripSGR(paneText(s.tl)), "\n"), "\n")
 	last := lines[len(lines)-1]
 	if !strings.Contains(last, "then the tests") || !strings.Contains(last, "waiting") {
 		t.Fatalf("the last line of the conversation is %q", last)
@@ -234,7 +236,7 @@ func TestWaitingMessagesSitAtTheEndOfTheConversation(t *testing.T) {
 	// It stops being a pending line the moment it becomes a real one.
 	finish(t, a, s)
 	_ = a.View()
-	content := stripSGR(s.tl.Content())
+	content := stripSGR(paneText(s.tl))
 	if strings.Contains(content, "· waiting") {
 		t.Fatalf("the sent message should no longer be pending:\n%s", content)
 	}
@@ -254,10 +256,10 @@ func TestEachAgentShowsItsOwnQueue(t *testing.T) {
 	second := a.addSession(first.Backend, t.TempDir())
 	a.selectSession(1)
 	_ = a.View()
-	if strings.Contains(stripSGR(second.tl.Content()), "for the first") {
+	if strings.Contains(stripSGR(paneText(second.tl)), "for the first") {
 		t.Fatal("the other agent's queue leaked into this one")
 	}
-	if !strings.Contains(stripSGR(first.tl.Content()), "for the first") {
+	if !strings.Contains(stripSGR(paneText(first.tl)), "for the first") {
 		t.Fatal("a background agent should still show what it has waiting")
 	}
 	first.close()

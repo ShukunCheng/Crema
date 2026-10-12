@@ -311,25 +311,32 @@ func TestStaleStreamEventsAreDropped(t *testing.T) {
 	}
 }
 
-func TestTabCyclesSessionsAndAltJumps(t *testing.T) {
+func TestCtrlArrowCyclesSessionsAndAltJumps(t *testing.T) {
 	a := testApp(t)
 	a.addSession(fastMock(), t.TempDir())
 	a.addSession(fastMock(), t.TempDir())
 	a.selectSession(0)
 
-	a.Update(kmsg(tea.KeyTab))
+	a.Update(kmsg(tea.KeyCtrlDown))
 	if a.active != 1 {
-		t.Fatalf("tab should move to session 2, got %d", a.active)
+		t.Fatalf("ctrl+↓ should move to session 2, got %d", a.active)
 	}
+	a.Update(kmsg(tea.KeyCtrlUp))
+	if a.active != 0 {
+		t.Fatalf("ctrl+↑ should move back, got %d", a.active)
+	}
+	a.Update(kmsg(tea.KeyCtrlDown))
+	a.Update(kmsg(tea.KeyCtrlDown))
+	a.Update(kmsg(tea.KeyCtrlDown))
+	if a.active != 0 {
+		t.Fatalf("ctrl+↓ should wrap around, got %d", a.active)
+	}
+	// tab belongs to the completion lists now, and switches nothing.
+	was := a.active
+	a.Update(kmsg(tea.KeyTab))
 	a.Update(kmsg(tea.KeyShiftTab))
-	if a.active != 0 {
-		t.Fatalf("shift+tab should move back, got %d", a.active)
-	}
-	a.Update(kmsg(tea.KeyTab))
-	a.Update(kmsg(tea.KeyTab))
-	a.Update(kmsg(tea.KeyTab))
-	if a.active != 0 {
-		t.Fatalf("tab should wrap around, got %d", a.active)
+	if a.active != was {
+		t.Fatalf("tab should not switch agents any more, active = %d", a.active)
 	}
 	a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}, Alt: true})
 	if a.active != 2 {

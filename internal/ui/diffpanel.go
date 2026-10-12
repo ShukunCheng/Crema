@@ -30,7 +30,21 @@ type diffRow struct {
 	text   string
 	file   string // collapse key; "" for section headers and notices
 	header bool   // the file's own header line — the click target
+	// code is where the code itself sits on a line of a diff body: one span
+	// in the unified view, after the +/- marker; one per side in the split
+	// view, after each line-number gutter. A side with no line on this row
+	// has an empty span. Rows that are not code — headers, hunk markers —
+	// have none. It is what keeps a drag to one side's code.
+	code [2]colSpan
+	// divide is the column where the split view's right side begins; 0 in
+	// the unified view, which has one side.
+	divide int
 }
+
+// colSpan is a half-open range of display columns.
+type colSpan struct{ lo, hi int }
+
+func (c colSpan) ok() bool { return c.hi > c.lo }
 
 // DiffFileKey identifies a file within a DiffSet. A path can appear twice, once
 // staged and once not, so the flag is part of the key.
@@ -88,16 +102,21 @@ func renderDiffFile(f gitdiff.File, w int, folded bool) []diffRow {
 	del := delLine().Width(w)
 	ctx := fg(T.Muted).Width(w)
 	hdr := fg(T.Purple).Width(w)
+	codeRow := func(s string) diffRow {
+		r := bodyRow(s)
+		r.code[0] = colSpan{1, w} // everything after the +/- marker
+		return r
+	}
 	for _, h := range f.Hunks {
 		rows = append(rows, bodyRow(hdr.Render(clip(h.Header, w))))
 		for _, ln := range h.Lines {
 			switch ln.Kind {
 			case gitdiff.LineAdd:
-				rows = append(rows, bodyRow(add.Render(clip("+"+ln.Text, w))))
+				rows = append(rows, codeRow(add.Render(clip("+"+ln.Text, w))))
 			case gitdiff.LineDel:
-				rows = append(rows, bodyRow(del.Render(clip("-"+ln.Text, w))))
+				rows = append(rows, codeRow(del.Render(clip("-"+ln.Text, w))))
 			default:
-				rows = append(rows, bodyRow(ctx.Render(clip(" "+ln.Text, w))))
+				rows = append(rows, codeRow(ctx.Render(clip(" "+ln.Text, w))))
 			}
 		}
 	}
@@ -275,9 +294,41 @@ func (d *DiffPanel) contentLines() []string {
 }
 
 // BeginSelect starts a drag at a content line and column.
+//
+// A drag that starts on code stays with that code: on the side it started on
+// in the split view, after the line numbers, and off the lines that are not
+// code. That is what makes copying the new version of a function give the
+// function, rather than both versions interleaved with their line numbers.
 func (d *DiffPanel) BeginSelect(line, col int) {
 	d.sel.begin(line, col)
+	if line >= 0 && line < len(d.rows) {
+		r := d.rows[line]
+		side := 0
+		if r.divide > 0 && col >= r.divide {
+			side = 1
+		}
+		if r.code[side].ok() || (r.divide > 0 && r.code[1-side].ok()) {
+			rows := d.rows
+			d.sel.within = func(i int) (int, int, bool) {
+				if i < 0 || i >= len(rows) {
+					return 0, 0, false
+				}
+				c := rows[i].code[side]
+				return c.lo, c.hi, c.ok()
+			}
+		}
+	}
 	d.sync()
+}
+
+// ResumeSelect is shift+click on the diff; see selection.resume. A drag that
+// was kept to one side's code stays kept to it.
+func (d *DiffPanel) ResumeSelect(line, col int) bool {
+	if !d.sel.resume(line, col) {
+		return false
+	}
+	d.sync()
+	return true
 }
 
 // ExtendSelect moves the loose end of an in-progress drag.

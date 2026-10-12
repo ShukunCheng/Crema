@@ -23,7 +23,9 @@ type ClaudeParser struct {
 	// once per API call; lastMsg is how a repeat is spotted.
 	outTokens int64
 	lastMsg   string
-	Skipped   int
+	// stopReason is the last assistant message's, which is the turn's.
+	stopReason string
+	Skipped    int
 }
 
 type claudeLine struct {
@@ -51,7 +53,12 @@ type claudeLine struct {
 		TaskType    string `json:"task_type"`
 		Description string `json:"description"`
 	} `json:"tasks"`
-	SessionID    string         `json:"session_id"`
+	SessionID string `json:"session_id"`
+	// IsSynthetic marks a message the CLI wrote into the conversation rather
+	// than anyone saying it: a skill's instructions after the Skill tool, a
+	// reminder, a notice. The transcript on disk calls the same thing isMeta.
+	IsSynthetic  bool           `json:"isSynthetic"`
+	IsMeta       bool           `json:"isMeta"`
 	Message      *claudeMessage `json:"message"`
 	IsError      bool           `json:"is_error"`
 	DurationMS   int64          `json:"duration_ms"`
@@ -91,8 +98,13 @@ type claudeRateLimit struct {
 }
 
 type claudeMessage struct {
-	ID      string        `json:"id"`
-	Content []claudeBlock `json:"content"`
+	ID string `json:"id"`
+	// StopReason is why the model stopped writing. Most of the time it is
+	// end_turn or tool_use and says nothing worth repeating; max_tokens and
+	// refusal are the two that mean the turn stopped rather than finished,
+	// and both used to look exactly like an ordinary ending.
+	StopReason string        `json:"stop_reason"`
+	Content    []claudeBlock `json:"content"`
 	// Usage is per API call, not per turn: this is what the model read to
 	// produce this one message.
 	Usage *claudeUsage `json:"usage"`
@@ -212,10 +224,26 @@ func (p *ClaudeParser) ParseLine(line []byte) []Event {
 				p.rates = append(p.rates, r)
 			}
 			sort.Slice(p.rates, func(i, j int) bool { return p.rates[i].ResetsAt.Before(p.rates[j].ResetsAt) })
+			// It is also said now, not only at the end of the turn. The CLI
+			// sends this once, near the start of a turn, so holding it for the
+			// result line left the gauges showing the last turn's numbers for
+			// as long as this one ran — half an hour, on a long one.
+			rates := p.rates
+			if len(rates) == 0 {
+				rates = []RateLimit{legacy}
+			}
+			return []Event{{Kind: KindRate, Rates: append([]RateLimit(nil), rates...)}}
 		}
 		return nil
 	case "assistant", "user":
 		if l.Message == nil {
+			return nil
+		}
+		if l.Type == "user" && (l.IsSynthetic || l.IsMeta) {
+			// A skill's whole SKILL.md arrives this way, right after the Skill
+			// tool says it is launching, and was being drawn as if the agent
+			// had written it. It is for the model, not for you: the Skill call
+			// and its "Launching skill" result already say what happened.
 			return nil
 		}
 		if l.Type == "assistant" && l.Message.Usage != nil && l.ParentTool == "" {
@@ -226,6 +254,7 @@ func (p *ClaudeParser) ParseLine(line []byte) []Event {
 			// these is how big it has become. Summing them, which is what the
 			// result line's own usage does, counts it once per call.
 			p.context = l.Message.Usage.context()
+			p.stopReason = l.Message.StopReason
 			// Output, on the other hand, does add up — but one API call
 			// arrives as several lines, one per content block, each repeating
 			// that call's usage. The message id is what tells them apart.
@@ -263,7 +292,9 @@ func (p *ClaudeParser) ParseLine(line []byte) []Event {
 		}
 		return evs
 	case "result":
-		defer func() { p.outTokens, p.lastMsg = 0, "" }() // the next turn counts afresh
+		defer func() { // the next turn counts afresh
+			p.outTokens, p.lastMsg, p.stopReason = 0, "", ""
+		}()
 		res := TurnResult{
 			SessionID: p.sessionID, DurationMS: l.DurationMS,
 			CostUSD: l.TotalCostUSD - p.costTotal, RateLimit: p.rate,
@@ -284,6 +315,7 @@ func (p *ClaudeParser) ParseLine(line []byte) []Event {
 		// every API call it took. What fills the context window is one call's
 		// worth, so the last message's is the number to keep.
 		res.ContextTokens = p.context
+		res.StopReason = p.stopReason
 		for _, mu := range l.ModelUsage { // same window for every entry of one turn
 			if mu.ContextWindow > 0 {
 				res.ContextWindow = mu.ContextWindow

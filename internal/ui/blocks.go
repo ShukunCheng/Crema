@@ -74,7 +74,7 @@ func RenderAssistant(text string, w int) string {
 			b.WriteString(drawTable(rows, w))
 			continue
 		}
-		b.WriteString(body(w).Foreground(T.Fg).Render(linkify(strings.Join(seg.lines, "\n"))) + "\n")
+		b.WriteString(renderMarkdown(strings.Join(seg.lines, "\n"), w))
 	}
 	return b.String()
 }

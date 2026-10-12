@@ -163,7 +163,7 @@ func backgroundChip(s *Session) (controlChip, bool) {
 		if kind == "local_bash" {
 			kind = "shell"
 		}
-		desc := t.Desc
+		desc := descLine(t.Desc)
 		if t.LastTool != "" {
 			desc += " · now: " + t.LastTool
 		}

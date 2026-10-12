@@ -22,11 +22,14 @@ type Input struct {
 	ta    textarea.Model
 	width int
 	rows  int // text rows currently shown, 1..maxInputRows
+	// sel is the drag in the box, in its own display grid. Crema holds the
+	// mouse, so the terminal's own selection is gone; see inputsel.go.
+	sel selection
 }
 
 func NewInput(w int) *Input {
 	ta := textarea.New()
-	ta.Placeholder = "ask the agent…  (enter send · ↓ model & permissions · tab switch agent · esc cancel)"
+	ta.Placeholder = "ask the agent…  (enter send · ↓ model & permissions · ctrl+↑↓ switch agent · esc cancel)"
 	ta.Prompt = "❯ "
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
@@ -59,6 +62,12 @@ func NewInput(w int) *Input {
 	// press. Its bindings are emptied so there is no second, shadowed answer.
 	ta.KeyMap.WordBackward = key.NewBinding(key.WithDisabled())
 	ta.KeyMap.WordForward = key.NewBinding(key.WithDisabled())
+	// ctrl+a selects the draft, which is what it means in a text box
+	// everywhere else on the desktop. The text area binds it to line-start,
+	// emacs-fashion, alongside home — so home keeps that job and ctrl+a is
+	// taken off it rather than answering to two things at once.
+	ta.KeyMap.LineStart = key.NewBinding(
+		key.WithKeys("home"), key.WithHelp("home", "line start"))
 	ta.Focus()
 	i := &Input{ta: ta, width: max(1, w), rows: 1}
 	i.ApplyTheme()
@@ -171,6 +180,7 @@ func (i *Input) Value() string { return i.ta.Value() }
 // SetValue replaces the draft and puts the caret at the end, so completing a
 // command leaves the user ready to type its arguments.
 func (i *Input) SetValue(s string) {
+	i.sel.clear()
 	i.ta.SetValue(s)
 	i.ta.CursorEnd()
 	i.syncHeight()
@@ -183,6 +193,7 @@ func (i *Input) Insert(s string) {
 }
 
 func (i *Input) Reset() {
+	i.sel.clear()
 	i.ta.Reset()
 	i.syncHeight()
 }
@@ -193,6 +204,20 @@ func (i *Input) Focused() bool  { return i.ta.Focused() }
 
 func (i *Input) Update(msg tea.Msg) tea.Cmd {
 	if k, ok := msg.(tea.KeyMsg); ok {
+		if k.Type == tea.KeyCtrlA {
+			i.SelectAll()
+			return nil
+		}
+		if move, ok := shiftMoves[k.String()]; ok {
+			i.extendSelection(move)
+			return nil
+		}
+		// Typing over a highlight replaces it, backspace deletes it, and
+		// anything else drops it and carries on.
+		if i.selectionKey(k) {
+			i.syncHeight()
+			return nil
+		}
 		switch {
 		case isDeleteWordBack(k):
 			i.deleteWordBack()
@@ -387,10 +412,7 @@ func (i *Input) View() string {
 	}
 	// The text area always renders maxInputRows; show the ones in use. Its
 	// view starts at the top of the draft, so those are the first rows.
-	rows := strings.Split(i.ta.View(), "\n")
-	if len(rows) > i.rows {
-		rows = rows[:i.rows]
-	}
+	rows := i.highlighted()
 	// keepBG because the textarea nests styles we don't control.
 	return pane(c).Width(max(1, i.width-2)).Height(i.rows).
 		Render(keepBG(strings.Join(rows, "\n")))

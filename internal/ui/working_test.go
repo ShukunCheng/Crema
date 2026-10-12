@@ -8,6 +8,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// paneText is everything the conversation pane draws: the transcript, then the
+// working line and anything waiting behind it. Content() is the transcript
+// alone — the rows under it are drawn outside the viewport so that a spinner
+// ticking ten times a second does not hand the whole transcript back to it —
+// so a test that wants both asks for both.
+func paneText(t *Timeline) string {
+	out := t.Content()
+	for _, r := range t.tailView() {
+		out += r + "\n"
+	}
+	return out
+}
+
 // feed delivers one stream event to a session, the way the adapter does.
 func feed(a *App, s *Session, ev agent.Event) {
 	a.Update(agentEventMsg{sess: s.ID, seq: s.streamSeq, ev: ev})
@@ -20,7 +33,7 @@ func TestAWorkingLineSitsUnderTheConversation(t *testing.T) {
 	s := busyTurn(t, a)
 	_ = a.View()
 
-	lines := strings.Split(strings.TrimRight(stripSGR(s.tl.Content()), "\n"), "\n")
+	lines := strings.Split(strings.TrimRight(stripSGR(paneText(s.tl)), "\n"), "\n")
 	last := lines[len(lines)-1]
 	for _, want := range []string{"working…", "0s", "esc to cancel"} {
 		if !strings.Contains(last, want) {
@@ -33,7 +46,7 @@ func TestAWorkingLineSitsUnderTheConversation(t *testing.T) {
 
 	finish(t, a, s)
 	_ = a.View()
-	if strings.Contains(stripSGR(s.tl.Content()), "esc to cancel") {
+	if strings.Contains(stripSGR(paneText(s.tl)), "esc to cancel") {
 		t.Fatal("an idle agent has nothing to say")
 	}
 }
@@ -54,7 +67,7 @@ func TestTheWorkingLineSaysWhatItIsDoing(t *testing.T) {
 	} {
 		feed(a, s, c.ev)
 		_ = a.View()
-		if !strings.Contains(stripSGR(s.tl.Content()), c.want) {
+		if !strings.Contains(stripSGR(paneText(s.tl)), c.want) {
 			t.Fatalf("after %v the line should say %q", c.ev.Kind, c.want)
 		}
 	}
@@ -66,18 +79,18 @@ func TestTheWorkingLineCountsTokensOnlyWhenToldAny(t *testing.T) {
 	a := testApp(t)
 	s := busyTurn(t, a)
 	_ = a.View()
-	if strings.Contains(stripSGR(s.tl.Content()), "tokens") {
+	if strings.Contains(stripSGR(paneText(s.tl)), "tokens") {
 		t.Fatal("nothing has been reported yet, so nothing may be claimed")
 	}
 	feed(a, s, agent.Event{Kind: agent.KindText, Text: "a", OutTokens: 1234})
 	_ = a.View()
-	if !strings.Contains(stripSGR(s.tl.Content()), "↓ 1.2k tokens") {
-		t.Fatalf("token count missing:\n%s", stripSGR(s.tl.Content()))
+	if !strings.Contains(stripSGR(paneText(s.tl)), "↓ 1.2k tokens") {
+		t.Fatalf("token count missing:\n%s", stripSGR(paneText(s.tl)))
 	}
 	// A later event with no count of its own must not erase the one we have.
 	feed(a, s, agent.Event{Kind: agent.KindToolOutput, Output: &agent.ToolOutput{Content: "x"}})
 	_ = a.View()
-	if !strings.Contains(stripSGR(s.tl.Content()), "1.2k tokens") {
+	if !strings.Contains(stripSGR(paneText(s.tl)), "1.2k tokens") {
 		t.Fatal("the count went backwards")
 	}
 	s.close()
@@ -103,7 +116,7 @@ func TestTheWorkingLineDoesNotConfuseTheQueue(t *testing.T) {
 	press(t, a, kmsg(tea.KeyEnter))
 	_ = a.View()
 
-	lines := strings.Split(strings.TrimRight(stripSGR(s.tl.Content()), "\n"), "\n")
+	lines := strings.Split(strings.TrimRight(stripSGR(paneText(s.tl)), "\n"), "\n")
 	if n := len(lines); !strings.Contains(lines[n-2], "esc to cancel") ||
 		!strings.Contains(lines[n-1], "afterwards") {
 		t.Fatalf("want working then waiting, got:\n%s", strings.Join(lines[n-2:], "\n"))
@@ -123,10 +136,10 @@ func TestEachAgentHasItsOwnWorkingLine(t *testing.T) {
 	a.selectSession(1)
 	_ = a.View()
 
-	if !strings.Contains(stripSGR(first.tl.Content()), "esc to cancel") {
+	if !strings.Contains(stripSGR(paneText(first.tl)), "esc to cancel") {
 		t.Fatal("the busy agent should still show its line")
 	}
-	if strings.Contains(stripSGR(second.tl.Content()), "esc to cancel") {
+	if strings.Contains(stripSGR(paneText(second.tl)), "esc to cancel") {
 		t.Fatal("the idle one should not")
 	}
 	first.close()

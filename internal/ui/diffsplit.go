@@ -109,13 +109,23 @@ func renderSplitFile(f gitdiff.File, w int, folded bool) []diffRow {
 		rows = append(rows, diffRow{
 			text: fg(T.Purple).Width(w).Render(clip(h.Header, w)), file: key,
 		})
+		divide := left + lipgloss.Width(splitDivider)
 		for _, r := range pairHunk(h) {
-			rows = append(rows, diffRow{
+			row := diffRow{
 				text: splitSide(r.hasOld, r.oldNum, r.oldText, left, r.changed, gitdiff.LineDel) +
 					div +
 					splitSide(r.hasNew, r.newNum, r.newText, right, r.changed, gitdiff.LineAdd),
-				file: key,
-			})
+				file:   key,
+				divide: divide,
+			}
+			// The code on each side starts after its line-number gutter.
+			if r.hasOld {
+				row.code[0] = colSpan{min(gutterW, left), left}
+			}
+			if r.hasNew {
+				row.code[1] = colSpan{min(divide+gutterW, w), w}
+			}
+			rows = append(rows, row)
 		}
 	}
 	return rows

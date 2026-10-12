@@ -55,6 +55,7 @@ func TestLightAndDarkPalettesDiffer(t *testing.T) {
 		"UserBg":  {DarkTheme.UserBg, LightTheme.UserBg},
 		"AddBg":   {DarkTheme.AddBg, LightTheme.AddBg},
 		"DelBg":   {DarkTheme.DelBg, LightTheme.DelBg},
+		"CodeBg":  {DarkTheme.CodeBg, LightTheme.CodeBg},
 	} {
 		if pair[0] == "" || pair[1] == "" {
 			t.Fatalf("%s is unset in one of the palettes", name)

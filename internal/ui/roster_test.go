@@ -181,3 +181,42 @@ func TestClickingARosterRowSelectsIt(t *testing.T) {
 		t.Fatalf("the walk should be on the main row, got %v", a.controls.Kind())
 	}
 }
+
+// A shell's description is its command, and a command can be a whole script.
+// Drawn as it came, every line of a heredoc became a row under the status
+// bar, pushing the frame past the bottom of the screen. The row shows the
+// first line and says there is more; the frame stays exactly as tall as the
+// window.
+func TestAShellRunningAScriptTakesOneRow(t *testing.T) {
+	a := testApp(t)
+	a.resize(120, 30)
+	s := a.cur()
+	script := "cat > /d/tmp/ci/monitor.sh <<'EOF'\n#!/usr/bin/env bash\nwhile :; do\n  sleep 300\ndone\nEOF\nbash /d/tmp/ci/monitor.sh"
+	s.noteTask(&agent.TaskUpdate{ID: "b1", Status: "running", Type: "local_bash", Desc: script})
+	a.resize(120, 30)
+	view := stripSGR(a.View())
+	if got := len(strings.Split(view, "\n")); got != 30 {
+		t.Fatalf("the frame is %d rows, want the window's 30", got)
+	}
+	if strings.Contains(view, "#!/usr/bin/env bash") || strings.Contains(view, "sleep 300") {
+		t.Fatalf("the script's body should not be drawn:\n%s", lastLines(view, 6))
+	}
+	if !strings.Contains(view, "cat > /d/tmp/ci/monitor.sh <<'EOF' …") {
+		t.Fatalf("the row should show the first line and that there is more:\n%s", lastLines(view, 6))
+	}
+}
+
+func TestDescLine(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                        "",
+		"one line":                "one line",
+		"  padded \t tabs ":       "padded tabs",
+		"first\nsecond":           "first …",
+		"only\n\n  \n":            "only",
+		"\n\nafter blank lines\n": "after blank lines",
+	} {
+		if got := descLine(in); got != want {
+			t.Errorf("descLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

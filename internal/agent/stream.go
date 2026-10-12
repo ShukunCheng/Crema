@@ -10,8 +10,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/ShukunCheng/Crema/internal/crlog"
 )
 
 // One turn used to be one process: `claude -p --resume`, answer, exit. That
@@ -152,18 +155,74 @@ func (cv *claudeConv) read(stdout io.Reader, stderrDone <-chan struct{}) {
 	werr := cv.cmd.Wait()
 	<-stderrDone
 	if !inTurn {
-		return // ended between turns: nothing was owed
+		// Nothing was owed for a turn — but a process that died with
+		// something to say should still say it. A CLI that cannot
+		// authenticate prints the reason to stderr and exits before it
+		// produces a single event, so inTurn was false, this returned in
+		// silence, and the one sentence that explained the failure was
+		// thrown away. All crema could offer was "the agent stream ended
+		// without finishing the turn", which is true and useless.
+		if !cv.isClosed() {
+			if msg := cv.deathNote(werr); msg != "" {
+				crlog.Log("proc.died", "in_turn", false, "err", fmt.Sprint(werr),
+					"stderr", strings.TrimSpace(cv.tail.String()))
+				cv.events <- Event{Kind: KindError, Text: msg}
+			}
+		}
+		return
 	}
 	res := TurnResult{SessionID: cv.parser.SessionID()}
 	if cv.isClosed() {
 		res.Canceled = true
 	} else {
+		crlog.Log("proc.died", "in_turn", true, "err", fmt.Sprint(werr),
+			"stderr", strings.TrimSpace(cv.tail.String()))
 		res.Err = fmt.Sprintf("claude exited mid-turn: %v", werr)
-		if s := cv.tail.String(); s != "" {
+		if s := strings.TrimSpace(cv.tail.String()); s != "" {
 			res.Err += "\n─ stderr tail ─\n" + s
+			if hint := loginHint(s); hint != "" {
+				res.Err += "\n\n" + hint
+			}
 		}
 	}
 	cv.events <- Event{Kind: KindTurnEnd, Result: &res}
+}
+
+// deathNote is what to say about a process that ended on its own, or empty
+// when it ended cleanly with nothing to report.
+func (cv *claudeConv) deathNote(werr error) string {
+	tail := strings.TrimSpace(cv.tail.String())
+	if tail == "" && werr == nil {
+		return "" // it simply finished; the next message opens another
+	}
+	msg := "the agent's process ended"
+	if werr != nil {
+		msg += ": " + werr.Error()
+	}
+	if tail != "" {
+		msg += "\n─ stderr tail ─\n" + tail
+	}
+	if hint := loginHint(tail); hint != "" {
+		msg += "\n\n" + hint
+	}
+	return msg
+}
+
+// loginHint recognises the one failure crema can tell you how to fix. The
+// subscription login is an OAuth pair — a short-lived access token and a
+// refresh token to renew it — and when the refresh fails there is nothing
+// crema can do about it from here, because crema never handles credentials.
+// Signing in again is the whole of the answer, so it says so rather than
+// leaving you with the CLI's sentence and no next step.
+func loginHint(stderr string) string {
+	low := strings.ToLower(stderr)
+	for _, sign := range []string{"oauth", "authenticate", "unauthorized", "log in", "login", "credentials"} {
+		if strings.Contains(low, sign) {
+			return "crema never handles credentials — this is the CLI's own login. " +
+				"Run `claude` in a terminal once to sign in again, then send this message again."
+		}
+	}
+	return ""
 }
 
 // userMessage is one turn as the CLI wants it on stdin.

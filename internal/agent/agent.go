@@ -22,6 +22,7 @@ const (
 	KindControl                // the CLI's answer to a control request sent down its stdin
 	KindTaskList               // the CLI's whole list of backgrounded commands; one it dropped has ended
 	KindUser                   // something said to the agent; only a subagent transcript produces these
+	KindRate                   // the account's allowance, the moment the CLI reports it
 )
 
 type Event struct {
@@ -50,6 +51,9 @@ type Event struct {
 	// only. Measured (2.1.250): sent when one starts and when the list
 	// empties, listing task_id, task_type and description.
 	Tasks []TaskUpdate
+	// Rates is the allowance as the CLI just reported it: every window it
+	// named, soonest reset first. KindRate only.
+	Rates []RateLimit
 }
 
 // TaskUpdate is one report about a background task — a subagent the model
@@ -58,11 +62,15 @@ type Event struct {
 // task's full output went to. Fields are sparse; each update carries what
 // that report knew.
 type TaskUpdate struct {
-	ID         string // the CLI's own task id
-	ToolUseID  string // the tool call that launched it
-	Type       string // "general-purpose", "local_bash", …
-	Desc       string
-	Status     string // running | completed | failed
+	ID        string // the CLI's own task id
+	ToolUseID string // the tool call that launched it
+	Type      string // "general-purpose", "local_bash", …
+	Desc      string
+	Status    string // running | completed | failed | stopped
+	// Why is crema's own account of how it ended, when crema is the one who
+	// knows: a subagent does not stop on its own when the process it lives in
+	// is closed, and the reason that process closed is the reason it stopped.
+	Why        string
 	LastTool   string // what the subagent is running right now
 	Tokens     int64  // the subagent's own spend so far
 	ToolUses   int
@@ -142,9 +150,14 @@ type TurnResult struct {
 	// capacity. Both 0 when the backend doesn't report them.
 	ContextTokens int64
 	ContextWindow int64
-	RateLimit     *RateLimit
-	Canceled      bool
-	Err           string // non-empty ⇒ the turn failed
+	// StopReason is the model's own last word on why it stopped writing.
+	// end_turn and tool_use are the ordinary ones; max_tokens means the
+	// output ran into its ceiling and refusal means a classifier declined,
+	// and both of those are a turn that stopped rather than finished.
+	StopReason string
+	RateLimit  *RateLimit
+	Canceled   bool
+	Err        string // non-empty ⇒ the turn failed
 	// RateLimits is every usage window the turn's last rate_limit_event
 	// reported. Newer CLIs put both windows, percentages included, in the
 	// event's unifiedWindows; RateLimit above keeps the legacy single window

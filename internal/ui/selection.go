@@ -31,6 +31,11 @@ func ordered(a, b selPoint) (selPoint, selPoint) {
 type selection struct {
 	anchor, cursor    selPoint
 	selecting, active bool
+	// within, when set, keeps the selection inside a column range on each
+	// line, and off the lines that have none. The split diff uses it so a
+	// drag in the new code copies the new code, not the old side beside it
+	// or the line numbers in front of it.
+	within func(line int) (lo, hi int, ok bool)
 }
 
 func (s *selection) hasRange() bool {
@@ -44,6 +49,7 @@ func (s *selection) begin(line, col int) {
 	s.anchor = selPoint{line, max(0, col)}
 	s.cursor = s.anchor
 	s.selecting, s.active = true, false
+	s.within = nil // whoever wants a limit sets it after
 }
 
 func (s *selection) extend(line, col int) bool {
@@ -51,6 +57,20 @@ func (s *selection) extend(line, col int) bool {
 		return false
 	}
 	s.cursor = selPoint{line, max(0, col)}
+	return true
+}
+
+// resume picks a finished selection back up as a drag, its start where it
+// was and its loose end at line, col. It is shift+click: the highlight grows
+// or shrinks to the click, the way it does in any editor, and the release
+// finishes it like any other drag. It reports false when there is nothing to
+// resume, so the press can be an ordinary one.
+func (s *selection) resume(line, col int) bool {
+	if !s.done() {
+		return false
+	}
+	s.cursor = selPoint{line, max(0, col)}
+	s.selecting, s.active = true, false
 	return true
 }
 
@@ -74,6 +94,7 @@ func (s *selection) selectSpan(line, start, end int) bool {
 	}
 	s.anchor, s.cursor = selPoint{line, start}, selPoint{line, end}
 	s.selecting, s.active = false, true
+	s.within = nil
 	return true
 }
 
@@ -83,6 +104,7 @@ func (s *selection) clear() bool {
 	}
 	s.selecting, s.active = false, false
 	s.anchor, s.cursor = selPoint{}, selPoint{}
+	s.within = nil
 	return true
 }
 
@@ -98,9 +120,17 @@ func (s *selection) text(lines []string) string {
 		if i < 0 {
 			continue
 		}
+		if s.within != nil {
+			if _, _, ok := s.within(i); !ok {
+				continue // a header, or the other side's line: not this code
+			}
+		}
 		start, end := s.spanOn(lines[i], i, a, b)
 		seg := ansi.Strip(ansi.Cut(lines[i], start, end))
-		out = append(out, strings.TrimRight(stripRail(seg), " "))
+		if s.within == nil {
+			seg = stripRail(seg)
+		}
+		out = append(out, strings.TrimRight(seg, " "))
 	}
 	return strings.Join(out, "\n")
 }
@@ -141,6 +171,22 @@ func (s *selection) spanOn(line string, i int, a, b selPoint) (int, int) {
 	}
 	if end < start {
 		start, end = end, start
+	}
+	if s.within != nil {
+		lo, hi, ok := s.within(i)
+		if !ok {
+			return 0, 0
+		}
+		if i != a.line {
+			start = lo
+		}
+		if i != b.line {
+			end = hi
+		}
+		start, end = max(start, lo), min(end, hi)
+		if end < start {
+			return 0, 0
+		}
 	}
 	return start, end
 }
@@ -208,6 +254,15 @@ func stripRail(s string) string {
 func (t *Timeline) BeginSelect(line, col int) {
 	t.sel.begin(line, col)
 	t.sync()
+}
+
+// ResumeSelect is shift+click on the conversation; see selection.resume.
+func (t *Timeline) ResumeSelect(line, col int) bool {
+	if !t.sel.resume(line, col) {
+		return false
+	}
+	t.sync()
+	return true
 }
 
 // ExtendSelect moves the loose end of an in-progress drag.

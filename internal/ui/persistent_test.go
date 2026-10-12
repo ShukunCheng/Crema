@@ -285,7 +285,7 @@ func TestBackgroundWorkSurvivesTheTurnThatLaunchedIt(t *testing.T) {
 	}
 
 	// So does the process going away, since nothing is left to run it.
-	s.closeConv()
+	s.closeConv("a test closed it")
 	if s.RunningTasks() != 0 {
 		t.Fatalf("tasks = %+v, want none counted once the process is gone", s.tasks)
 	}

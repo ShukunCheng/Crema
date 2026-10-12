@@ -77,6 +77,7 @@ func StatePath() string {
 // version crema no longer understands — yields an empty state rather than an
 // error, because failing to remember must never stop the app from starting.
 func LoadState() State {
+	FlushState() // what has been saved should be what is read
 	p := StatePath()
 	if p == "" {
 		return State{}
@@ -94,8 +95,16 @@ func LoadState() State {
 
 // SaveState writes atomically, so a crash mid-write cannot leave a truncated
 // file that would lose every remembered agent.
+//
+// It waits for any save already queued in the background, so a slower write of
+// an older state can never land after this one and roll the file backwards.
 func SaveState(st State) error {
-	p := StatePath()
+	FlushState()
+	return writeStateTo(StatePath(), st)
+}
+
+// writeStateTo is the write itself, for a path decided by the caller.
+func writeStateTo(p string, st State) error {
 	if p == "" {
 		return errors.New("no user config directory")
 	}
@@ -115,6 +124,13 @@ func SaveState(st State) error {
 }
 
 // StateSnapshot captures the open agents for saving.
+//
+// The copy it returns is handed to another goroutine to write, so nothing in
+// it may be something the interface goes on changing in place. Blocks are
+// copied by trimForSaving and their strings never change; history is copied
+// here, because once it is full remember shifts it along inside the same
+// array, and a writer reading the shared array mid-shift would save a garbled
+// list.
 func (a *App) StateSnapshot() State {
 	st := State{
 		Version: stateVersion,
@@ -134,7 +150,7 @@ func (a *App) StateSnapshot() State {
 			Model:         s.Model,
 			Effort:        s.Effort,
 			Name:          s.Name,
-			History:       s.history,
+			History:       append([]string(nil), s.history...), // its own copy; see the doc above
 			CLICommands:   s.cliCmds,
 			Blocks:        trimForSaving(s.tl.Blocks()),
 		})
@@ -144,10 +160,10 @@ func (a *App) StateSnapshot() State {
 
 // persist writes the current agents, surfacing any failure in the status bar
 // rather than silently forgetting them.
+// persist saves the open agents. The copy is taken here, where the state is
+// consistent; the writing happens on a goroutine of its own. See saver.go.
 func (a *App) persist() {
-	if err := SaveState(a.StateSnapshot()); err != nil {
-		a.note = "could not save agents: " + err.Error()
-	}
+	saveLater(a.StateSnapshot())
 }
 
 // trimForSaving bounds the state file, marking whatever it drops.
@@ -162,6 +178,14 @@ func trimForSaving(bs []Block) []Block {
 	}
 	out := make([]Block, len(bs))
 	for i, b := range bs {
+		// A string is never more runes than it is bytes, so a short one cannot
+		// be over the cap and is not decoded to find out. This runs on the
+		// interface's own goroutine, over every block of every agent, on every
+		// save — decoding all of it each time was a real share of the cost.
+		if len(b.Text) <= maxSavedBlockRunes {
+			out[i] = b
+			continue
+		}
 		if r := []rune(b.Text); len(r) > maxSavedBlockRunes {
 			b.Text = string(r[:maxSavedBlockRunes]) +
 				fmt.Sprintf("\n… %d characters were not saved (crema cap %d)",

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 
 	"github.com/ShukunCheng/Crema/internal/gitdiff"
@@ -40,6 +41,9 @@ func renderEdit(tool, input string, w int) string {
 	var args editArgs
 	if json.Unmarshal([]byte(input), &args) != nil {
 		return ""
+	}
+	if md := renderWrittenMarkdown(tool, args, w); md != "" {
+		return md
 	}
 	lines := editBody(args)
 	if len(lines) == 0 {
@@ -186,4 +190,26 @@ func splitEditLines(s string) []string {
 		return nil
 	}
 	return strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+}
+
+// renderWrittenMarkdown draws a markdown file an agent has just written as the
+// document it is — headings, lists, emphasis, tables — rather than as a wall
+// of green "+" lines. A new file has no before to compare against, so every
+// line was an addition and the diff said nothing the rendering does not; what
+// is worth seeing is how the PR body or the doc will read. An edit to a
+// markdown file stays a diff: there, what changed is the point.
+func renderWrittenMarkdown(tool string, args editArgs, w int) string {
+	if tool != "Write" || args.OldString != "" || len(args.Edits) > 0 || args.Content == "" {
+		return ""
+	}
+	switch strings.ToLower(filepath.Ext(args.FilePath)) {
+	case ".md", ".markdown", ".mdx":
+	default:
+		return ""
+	}
+	const note = " · written, shown rendered"
+	path := clip(args.FilePath, max(1, w-len([]rune(note))))
+	head := fg(T.Lilac).Render(path) + fg(T.Muted).Render(clip(note, max(0, w-len([]rune(path)))))
+	return base().Width(w).Render(head) + "\n" +
+		strings.TrimRight(RenderAssistant(args.Content, w), "\n")
 }

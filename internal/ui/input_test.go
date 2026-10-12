@@ -133,11 +133,34 @@ func TestTypingTakesTheFocusBackToTheInput(t *testing.T) {
 func TestArrowsAndShortcutsDoNotStealTheFocus(t *testing.T) {
 	a := testApp(t)
 	a.Update(kmsg(tea.KeyCtrlO))
-	for _, k := range []tea.KeyMsg{kmsg(tea.KeyPgDown), kmsg(tea.KeyDown), kmsg(tea.KeyHome)} {
+	for _, k := range []tea.KeyMsg{kmsg(tea.KeyPgDown), kmsg(tea.KeyUp), kmsg(tea.KeyHome)} {
 		a.Update(k)
 		if a.focus != focusTimeline {
 			t.Fatalf("%v moved the focus off the conversation", k)
 		}
+	}
+}
+
+// ↓ with the message box not focused brings the focus back to it, from the
+// conversation or the diff; it used to scroll a line, which at the bottom of
+// the pane was nothing. It only comes back: the next ↓ is the one that walks
+// on into the hub.
+func TestDownComesBackToTheMessageBox(t *testing.T) {
+	a := testApp(t)
+	a.resize(160, 40)
+	for _, f := range []focusTarget{focusTimeline, focusDiff} {
+		a.setFocus(f)
+		a.Update(kmsg(tea.KeyDown))
+		if a.focus != focusInput || !a.in.Focused() {
+			t.Fatalf("↓ from %v should focus the message box, focus = %v", f, a.focus)
+		}
+		if a.controls != nil {
+			t.Fatal("and only focus it — the hub is the next ↓, not this one")
+		}
+	}
+	a.Update(kmsg(tea.KeyDown))
+	if a.controls == nil {
+		t.Fatal("from the box, ↓ walks on into the hub as before")
 	}
 }
 

@@ -102,7 +102,10 @@ func OpenSubagentLog(dir, sessionID, taskID string) (*SubagentLog, error) {
 // is content: an assistant message carries an array of blocks, a user message
 // carries either an array of tool results or a bare string.
 type subLine struct {
-	Type    string `json:"type"`
+	Type string `json:"type"`
+	// IsMeta is a message the CLI wrote in, not one anybody said — a skill's
+	// instructions, most visibly. It is not part of the conversation you read.
+	IsMeta  bool `json:"isMeta"`
 	Message *struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
@@ -161,7 +164,7 @@ func subEvents(line []byte) []Event {
 		return nil
 	}
 	var l subLine
-	if err := json.Unmarshal(line, &l); err != nil || l.Message == nil {
+	if err := json.Unmarshal(line, &l); err != nil || l.Message == nil || l.IsMeta {
 		return nil
 	}
 	switch l.Type {

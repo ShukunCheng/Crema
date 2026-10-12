@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ShukunCheng/Crema/internal/agent"
+	"github.com/ShukunCheng/Crema/internal/crlog"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -44,6 +45,10 @@ func init() {
 		{name: "permissions", desc: "what this agent is allowed to do", run: runPermissions},
 		{name: "effort", desc: "how hard this agent thinks — /effort low|medium|high|xhigh|max, or /effort default", run: runEffort},
 		{name: "rename", desc: "call this agent something — /rename api, or /rename to undo", run: runRename},
+		{name: "login", desc: "sign in to the backend — crema hands over the terminal and never sees the credential", run: runLogin},
+		{name: "logout", desc: "sign out of the backend, on this machine", run: runLogout},
+		{name: "whoami", desc: "who you are signed in as — read from disk, costs nothing", run: runWhoami},
+		{name: "log", desc: "crema's own diagnostic log — where it is, and the last of it", run: runLog},
 		{name: "cost", desc: "what this agent has spent, and how full its windows are", run: runCost},
 		{name: "diff", desc: "hide the diff, put it beside the conversation, or full screen", run: runDiff},
 		{name: "keytest", desc: "why an enter sends or breaks the line — pick a scenario to test it", run: runKeytest},
@@ -185,6 +190,7 @@ func hasCommand(cmds []agent.Command, name string) bool {
 }
 
 func runClear(a *App, s *Session, _ string) tea.Cmd {
+	a.warmSoon = true // whatever this closes, a message is coming
 	s.reset()
 	// Starting over starts the meter over: the dollars belonged to the
 	// conversation just dropped. /compact keeps its total, because the work
@@ -236,16 +242,18 @@ func (a *App) finishCompact(s *Session) {
 		a.note = "compact failed — the conversation is untouched"
 		return
 	}
-	s.closeConv() // the next message opens a process with no --resume
+	s.closeConv("the conversation was folded up") // the next opens one with no --resume
 	s.agentSID = ""
 	s.ctxTokens, s.ctxWindow = 0, 0
 	s.preamble = "This continues an earlier session. Here is where it had got to:\n\n" + summary
 	s.tl.ReplaceAnswer(Block{Kind: BlockSummary, Text: summary, Collapsed: true})
 	a.note = "compacted"
+	a.warmSoon = true // the folded conversation needs a process of its own
 	a.persist()
 }
 
 func runModel(a *App, s *Session, arg string) tea.Cmd {
+	a.warmSoon = true // whatever this closes, a message is coming
 	if arg == "" {
 		return a.openControls()
 	}
@@ -295,6 +303,7 @@ func runRename(a *App, s *Session, arg string) tea.Cmd {
 // of these too, but interactively — headless it is a command-line flag, so it
 // is crema's to carry.
 func runEffort(a *App, s *Session, arg string) tea.Cmd {
+	a.warmSoon = true // whatever this closes, a message is coming
 	levels := s.efforts()
 	if len(levels) <= 1 {
 		a.note = s.Backend.Label() + " has no effort setting"
@@ -326,6 +335,51 @@ func effortNames(levels []string) []string {
 		out = append(out, effortLabel(e))
 	}
 	return out
+}
+
+// runLog shows crema's own log: what it decided and when. It is not the
+// conversation — that is already on disk under ~/.claude/projects — it is the
+// record of crema's own doing, which is what is missing when a turn stops or a
+// subagent dies and there is nothing to point at.
+//
+// It costs nothing to keep and nothing to read: a local file, never sent to a
+// model. The only way a log costs tokens is if you paste it into a message.
+func runLog(a *App, s *Session, arg string) tea.Cmd {
+	p := crlog.Path()
+	if p == "" {
+		a.note = "the log is not open — crema could not write to its config directory"
+		return nil
+	}
+	n := 40
+	if v := parseCount(arg); v > 0 {
+		n = v
+	}
+	lines := crlog.Tail(n)
+	head := "crema's log · " + p
+	if d := crlog.Dropped(); d > 0 {
+		head += fmt.Sprintf(" · %d lines dropped while busy", d)
+	}
+	if len(lines) == 0 {
+		s.tl.Append(Block{Kind: BlockSystem, Text: head + "\n(nothing in it yet)"})
+		s.tl.ShowAnswer()
+		return nil
+	}
+	s.tl.Append(Block{Kind: BlockSystem, Text: head})
+	s.tl.Append(Block{Kind: BlockToolOutput, Text: strings.Join(lines, "\n"), Collapsed: false})
+	s.tl.ShowAnswer()
+	return nil
+}
+
+// parseCount reads "/log 100", and 0 for anything that is not a count.
+func parseCount(arg string) int {
+	n := 0
+	for _, r := range strings.TrimSpace(arg) {
+		if r < '0' || r > '9' {
+			return 0
+		}
+		n = n*10 + int(r-'0')
+	}
+	return min(n, 500)
 }
 
 func runPermissions(a *App, _ *Session, _ string) tea.Cmd {

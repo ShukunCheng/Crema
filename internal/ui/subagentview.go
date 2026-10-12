@@ -50,47 +50,17 @@ func subTick() tea.Cmd {
 	return tea.Tick(subPollEvery, func(time.Time) tea.Msg { return subTickMsg{} })
 }
 
-// subagent returns this session's view of one subagent, opening its
-// transcript the first time it is asked for. It returns nil while the CLI has
-// not written the file yet, which is an ordinary state for the first moment
-// of a subagent's life.
-func (s *Session) subagent(id string) *subagentView {
-	if id == "" {
-		return nil
-	}
-	if v, ok := s.subs[id]; ok {
-		if v.log == nil {
-			return nil
-		}
-		return v
+// ensureSubView makes sure a subagent has a view to fill, so the next poll
+// reads it — even one that finished before it was ever looked at, which the
+// poll would otherwise leave alone as nothing to catch up on.
+func (s *Session) ensureSubView(id string) {
+	if _, ok := s.subs[id]; ok || id == "" {
+		return
 	}
 	if s.subs == nil {
 		s.subs = map[string]*subagentView{}
 	}
-	v := &subagentView{task: id, tl: NewTimeline(s.tl.Width(), s.tl.Height())}
-	s.subs[id] = v
-	if !v.open(s) {
-		return nil
-	}
-	return v
-}
-
-// open finds the transcript. It is retried on later polls, because a subagent
-// is announced on the stream before its file exists.
-func (v *subagentView) open(s *Session) bool {
-	if v.log != nil {
-		return true
-	}
-	if v.misses > subOpenTries {
-		return false
-	}
-	l, err := agent.OpenSubagentLog(s.Dir, s.agentSID, v.task)
-	if err != nil {
-		v.misses++
-		return false
-	}
-	v.log, v.misses = l, 0
-	return true
+	s.subs[id] = &subagentView{task: id, tl: NewTimeline(s.tl.Width(), s.tl.Height())}
 }
 
 // subOpenTries is how long to keep looking for a transcript that has not
@@ -98,11 +68,47 @@ func (v *subagentView) open(s *Session) bool {
 // the gap measured between a task_started line and its file.
 const subOpenTries = 40
 
-// pollSubagents reads whatever every subagent of this session has written
-// since the last look. It reports whether anything arrived, which is what
-// tells the frame it is worth redrawing.
-func (s *Session) pollSubagents() bool {
-	changed := false
+// Reading the transcripts happens off the interface's goroutine. It is file
+// work — a stat, a read of whatever is new, and for a transcript not yet on
+// disk a glob across every project directory — and it runs twice a second
+// while anything is working. Measured on this machine, that glob alone took a
+// mean of 44 ms and up to 140 ms, and it was repeated for every subagent whose
+// file had not appeared yet: during a fan-out of five or six, a few hundred
+// milliseconds of every tick in which the keyboard did not answer.
+//
+// So the tick is split in three. What to read is decided on the interface's
+// goroutine, where the sessions live; the reading is done on another; and what
+// came back is applied on the interface's goroutine again. Only one poll is in
+// flight at a time, so a transcript's read position is only ever moved by one
+// reader.
+
+// subWork is one transcript to read, with everything the reader needs copied
+// in so it never has to look at a session.
+type subWork struct {
+	sess      int
+	task      string
+	dir, sid  string
+	log       *agent.SubagentLog // nil until the file has been found
+	wasActive bool               // still running when the work was set
+}
+
+// subResult is what one read came to.
+type subResult struct {
+	sess      int
+	task      string
+	opened    *agent.SubagentLog // set when this read found the file
+	evs       []agent.Event
+	miss      bool // looked for the file and it was not there yet
+	read      bool
+	wasActive bool
+}
+
+// subPolledMsg carries a finished poll back to the interface.
+type subPolledMsg struct{ results []subResult }
+
+// subWorkList is what this session wants read, decided where the session lives.
+func (s *Session) subWorkList() []subWork {
+	var out []subWork
 	for _, t := range s.tasks {
 		if t.Type == "local_bash" {
 			continue // a shell has no transcript; its output goes to a file
@@ -112,29 +118,79 @@ func (s *Session) pollSubagents() bool {
 			if t.Status != "running" {
 				continue // never opened and already over: nothing to catch up on
 			}
-			if v = s.subagent(t.ID); v == nil {
+			s.ensureSubView(t.ID)
+			v = s.subs[t.ID]
+		}
+		if v.done || (v.log == nil && v.misses > subOpenTries) {
+			continue
+		}
+		out = append(out, subWork{sess: s.ID, task: t.ID, dir: s.Dir, sid: s.agentSID,
+			log: v.log, wasActive: t.Status == "running"})
+	}
+	return out
+}
+
+// readSubWork does the file work. It touches no session, so it can run on any
+// goroutine.
+func readSubWork(work []subWork) []subResult {
+	out := make([]subResult, 0, len(work))
+	for _, w := range work {
+		r := subResult{sess: w.sess, task: w.task, wasActive: w.wasActive}
+		l := w.log
+		if l == nil {
+			opened, err := agent.OpenSubagentLog(w.dir, w.sid, w.task)
+			if err != nil {
+				r.miss = true
+				out = append(out, r)
 				continue
 			}
+			l, r.opened = opened, opened
 		}
-		if v.done {
+		evs, err := l.Read()
+		r.evs, r.read = evs, err == nil
+		out = append(out, r)
+	}
+	return out
+}
+
+// applySub puts what came back into this session's transcripts, and reports
+// whether anything new arrived.
+func (s *Session) applySub(results []subResult) bool {
+	changed := false
+	for _, r := range results {
+		if r.sess != s.ID {
 			continue
 		}
-		if !v.open(s) {
+		v, ok := s.subs[r.task]
+		if !ok {
+			continue // the agent was cleared while the read was out
+		}
+		if r.miss {
+			v.misses++
 			continue
 		}
-		evs, err := v.log.Read()
-		if err == nil {
-			for _, ev := range evs {
-				v.tl.AppendEvent(ev)
-			}
-			changed = changed || len(evs) > 0
+		if r.opened != nil && v.log == nil {
+			v.log, v.misses = r.opened, 0
 		}
-		if t.Status != "running" {
-			// One last read has just happened, so everything it wrote is in.
+		for _, ev := range r.evs {
+			v.tl.AppendEvent(ev)
+		}
+		changed = changed || len(r.evs) > 0
+		// Only a task that had already stopped when this read was set is done:
+		// one that stopped during the read may have written its last lines
+		// after it, and those are the answer.
+		if r.read && !r.wasActive {
 			v.done = true
 		}
 	}
 	return changed
+}
+
+// pollSubagents reads and applies in one go, on the calling goroutine. The
+// interface does not use it — it polls in the background — but a test wants
+// the answer now.
+func (s *Session) pollSubagents() bool {
+	return s.applySub(readSubWork(s.subWorkList()))
 }
 
 // subagentPending reports whether anything is worth polling: a subagent still
@@ -165,7 +221,7 @@ func (s *Session) subHeader(id string, w int) string {
 	t := s.task(id)
 	name, what := "subagent", ""
 	if t != nil {
-		name, what = t.Type, t.Desc
+		name, what = t.Type, descLine(t.Desc)
 		if name == "local_bash" {
 			name = "shell"
 		}
@@ -175,7 +231,7 @@ func (s *Session) subHeader(id string, w int) string {
 			name = v.log.Meta.Type
 		}
 		if what == "" {
-			what = v.log.Meta.Desc
+			what = descLine(v.log.Meta.Desc)
 		}
 	}
 	state := "running"

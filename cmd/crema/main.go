@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ShukunCheng/Crema/internal/agent"
+	"github.com/ShukunCheng/Crema/internal/crlog"
 	"github.com/ShukunCheng/Crema/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -118,12 +119,29 @@ func main() {
 	if typed["permission-mode"] || typed["model"] {
 		app.ApplyToFocused(typed["permission-mode"], mode, typed["model"], *model)
 	}
+	// crema's own diagnostic log, beside the state file. It costs nothing —
+	// it is a local file and nothing in it is ever sent to a model — and it is
+	// the difference between "it stopped again" and knowing what stopped it.
+	crlog.Open(filepath.Dir(ui.StatePath()))
+	defer crlog.Close()
+	crlog.Log("crema.start", "version", Version, "agents", len(saved.Sessions), "dir", abs)
+
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	stopWatch := make(chan struct{})
+	defer close(stopWatch)
+	go ui.WatchConsoleSize(p.Send, stopWatch)
 	if _, err := p.Run(); err != nil {
+		crlog.Log("crema.stop", "err", err.Error())
 		ui.ResetTerminalBackground()
 		ui.RestoreTerminalTitle()
+		ui.FlushState()
+		crlog.Close()
 		fail(err)
 	}
+	// Saving happens in the background now, so the last save may still be
+	// on its way to disk when the interface lets go. Wait for it.
+	ui.FlushState()
+	crlog.Log("crema.stop")
 }
 
 func pick(reg *agent.Registry, name string) (agent.Agent, error) {

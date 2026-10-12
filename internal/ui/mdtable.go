@@ -112,6 +112,9 @@ func drawTable(rows [][]string, w int) string {
 			st := lipgloss.NewStyle().Width(widths[c]).Foreground(T.Fg).Background(T.Bg)
 			if ri == 0 {
 				st = st.Bold(true).Foreground(T.Lilac)
+				text = stripInline(text) // the header is bold as a whole
+			} else {
+				text = inlineMarkdown(text, T.Fg)
 			}
 			cells[c] = strings.Split(st.Render(text), "\n")
 			depth = max(depth, len(cells[c]))

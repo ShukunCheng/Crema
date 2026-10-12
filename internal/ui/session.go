@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ShukunCheng/Crema/internal/agent"
+	"github.com/ShukunCheng/Crema/internal/crlog"
 	"github.com/ShukunCheng/Crema/internal/gitdiff"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -81,6 +82,12 @@ type Session struct {
 	// pending is what each control request still awaiting the CLI's answer
 	// asked for, by request id, so a refusal can be acted on.
 	pending map[string]string
+	// stoppedBy is why the conversation was closed while a turn was running,
+	// for the line that says so. Empty when the turn ended on its own.
+	stoppedBy string
+	// warmAt is when the process was launched ahead of any message, zero once
+	// a message has used it. It is how the log can say whether warming paid.
+	warmAt time.Time
 
 	pr         *PRInfo
 	prBranch   string
@@ -173,7 +180,7 @@ func (s *Session) Queued() []string {
 // agent has never heard of any of this. Spend is not reset, because it was
 // spent; the permission mode and model are the user's settings, not history.
 func (s *Session) reset() {
-	s.closeConv()
+	s.closeConv("the conversation was cleared")
 	s.agentSID = ""
 	s.ctxTokens, s.ctxWindow = 0, 0
 	s.preamble = ""
@@ -289,10 +296,10 @@ func (s *Session) SetPermission(p agent.PermissionMode) {
 		if id, err := ctl.SetPermission(p); err == nil {
 			s.await(id, "set_permission_mode")
 		} else {
-			s.closeConv()
+			s.closeConv(permWhy)
 		}
 	} else {
-		s.closeConv()
+		s.closeConv(permWhy)
 	}
 	s.tl.Append(Block{Kind: BlockSystem, Text: s.modeNote()})
 }
@@ -307,10 +314,10 @@ func (s *Session) SetModel(m string) {
 		if id, err := ctl.SetModel(m); err == nil {
 			s.await(id, "set_model")
 		} else {
-			s.closeConv()
+			s.closeConv(modelWhy)
 		}
 	} else {
-		s.closeConv() // a command-line flag: the next turn needs a new process
+		s.closeConv(modelWhy) // a flag: the next turn needs a new process
 	}
 	name := m
 	if m == agent.DefaultModel {
@@ -318,6 +325,15 @@ func (s *Session) SetModel(m string) {
 	}
 	s.tl.Append(Block{Kind: BlockSystem, Text: "model: " + name + " (applies to the next message)"})
 }
+
+// The reasons a setting can take a process down with it, named once so the
+// line that reports a stopped turn and the line that explains the cold start
+// cannot drift apart.
+const (
+	modelWhy  = "the model was changed"
+	permWhy   = "the permission mode was changed"
+	effortWhy = "the effort was changed"
+)
 
 // SetEffort changes how hard the agent is asked to think about a turn.
 //
@@ -332,7 +348,7 @@ func (s *Session) SetEffort(level string) {
 	}
 	s.Effort = level
 	had := s.conv != nil
-	s.closeConv()
+	s.closeConv(effortWhy)
 	name := level
 	if level == agent.DefaultEffort {
 		name = "the CLI's default"
@@ -418,6 +434,7 @@ func (s *Session) startTurn(shown, prompt string) tea.Cmd {
 	}
 	s.busy = true
 	s.turnStart = time.Now()
+	crlog.Log("turn.start", "agent", s.ID, "chars", len(prompt), "queued", len(s.queued))
 	s.activity, s.turnOut, s.turnEvents = "working", 0, 0
 	s.canceled = false
 	s.lastOpts = agent.RunOptions{
@@ -468,6 +485,14 @@ func (s *Session) noteResult(r *agent.TurnResult) {
 func (s *Session) endTurn() {
 	r := s.lastResult
 	s.lastResult = nil
+	// The idle clock is about the prompt cache, and the cache was just
+	// written — so it runs from the end of the turn rather than from the
+	// message that started it. A turn lasting over an hour used to leave the
+	// clock an hour stale, and the very next frame threw away a process whose
+	// cache was seconds old.
+	if s.conv != nil {
+		s.convAt = time.Now()
+	}
 	// A turn that ends cleanly having produced nothing at all would otherwise
 	// render as pure silence — the message went, the CLI came back "fine",
 	// and the conversation shows no answer of any kind. Measured in the wild:
@@ -496,7 +521,7 @@ func (s *Session) endTurn() {
 		// a subagent outliving the turn that launched it is the whole point
 		// of backgrounding one, and sweeping here made background work
 		// vanish from the sidebar the moment the turn ended.
-		s.endStrayTasks()
+		s.endStrayTasks("the agent's process ended")
 	}
 }
 
@@ -504,12 +529,43 @@ func (s *Session) endTurn() {
 // a task ended while it is alive; if it exits without ever saying, the task
 // is not still going — nothing is left to run it — and it should not haunt
 // the sidebar as though it were.
-func (s *Session) endStrayTasks() {
-	for i := range s.tasks {
-		if s.tasks[i].Status == "running" {
-			s.tasks[i].Status, s.tasks[i].Ended = "ended with its process", time.Now()
-		}
+func (s *Session) endStrayTasks(why string) {
+	if why == "" {
+		why = "its process went away"
 	}
+	for i := range s.tasks {
+		if s.tasks[i].Status != "running" {
+			continue
+		}
+		t := &s.tasks[i]
+		crlog.Log("task.stranded", "agent", s.ID, "task", t.ID,
+			"type", t.Type, "desc", t.Desc, "why", why)
+		t.Status, t.Why, t.Ended = "stopped", why, time.Now()
+		// A subagent that is killed rather than finished leaves nothing in
+		// the conversation — its answer never arrived — so the conversation
+		// is where it is said. The roster row is gone in thirty seconds; a
+		// question about work that never came back is not.
+		s.tl.Append(Block{Kind: BlockError, Text: subagentStopped(*t, why)})
+	}
+}
+
+// subagentStopped is the line a killed subagent leaves behind.
+func subagentStopped(t agent.TaskUpdate, why string) string {
+	name := t.Type
+	if name == "local_bash" {
+		name = "a shell"
+	}
+	if name == "" {
+		name = "a subagent"
+	}
+	line := name + " stopped before it finished — " + why
+	if t.Desc != "" {
+		line += "\nit was on: " + descLine(t.Desc)
+	}
+	if !t.Started.IsZero() {
+		line += fmt.Sprintf(" (%s in)", shortDur(time.Since(t.Started)))
+	}
+	return line
 }
 
 // noteTask merges one background-task report over what is already known. The
@@ -526,6 +582,10 @@ func (s *Session) noteTask(u *agent.TaskUpdate) {
 		}
 		t := &s.tasks[i]
 		if u.Status != "" {
+			if t.Status != u.Status {
+				crlog.Log("task.status", "agent", s.ID, "task", t.ID,
+					"type", t.Type, "from", t.Status, "to", u.Status, "desc", t.Desc)
+			}
 			if t.Status == "running" && u.Status != "running" {
 				t.Ended = time.Now() // what the roster counts its last moments from
 			}
@@ -561,6 +621,8 @@ func (s *Session) noteTask(u *agent.TaskUpdate) {
 	if u.Started.IsZero() {
 		u.Started = time.Now()
 	}
+	crlog.Log("task.start", "agent", s.ID, "task", u.ID, "type", u.Type,
+		"desc", u.Desc, "depth", u.SpawnDepth, "backgrounded", u.Backgrounded)
 	s.tasks = append(s.tasks, *u)
 }
 
@@ -591,6 +653,20 @@ func (s *Session) RunningTasks() int {
 		}
 	}
 	return n
+}
+
+// noteRates takes the allowance the moment the CLI reports it, rather than
+// at the end of the turn it arrived in. It is written where the status-line
+// bridge writes, so every other agent and the next run see it as well.
+func (s *Session) noteRates(rates []agent.RateLimit) {
+	known := false
+	for _, r := range rates {
+		known = known || r.Known
+	}
+	if known {
+		_ = agent.RecordUsage(rates)
+	}
+	s.refreshLimits(rates)
 }
 
 // refreshLimits works out what to say about the subscription's allowance. The
@@ -637,25 +713,21 @@ func (s *Session) persistent() bool {
 func (s *Session) sendToConv(prompt string) tea.Cmd {
 	fresh := false
 	if s.conv == nil {
-		st, ok := s.Backend.(agent.Streamer)
-		if !ok {
-			return nil
-		}
-		ctx, stop := context.WithCancel(context.Background())
-		conv, err := st.Open(ctx, s.lastOpts)
-		if err != nil {
-			stop()
-			s.tl.Append(Block{Kind: BlockError, Text: err.Error()})
+		if !s.openConv(s.lastOpts, false) {
 			s.busy = false
 			return nil
 		}
-		s.conv, s.convStop, fresh = conv, stop, true
-		s.streamSeq++
-		s.stream = conv.Events()
+		fresh = true
+	} else if !s.warmAt.IsZero() {
+		// The process was launched ahead of this message, so the boot that
+		// would have stood between you and the first reply is already done.
+		crlog.Log("conv.warm_used", "agent", s.ID,
+			"ready_for_s", int(time.Since(s.warmAt).Seconds()))
 	}
+	s.warmAt = time.Time{}
 	if err := s.conv.Send(prompt); err != nil {
 		// The process died between turns; the next message opens a new one.
-		s.closeConv()
+		s.closeConv("the agent's process had already ended")
 		s.tl.Append(Block{Kind: BlockError, Text: "the agent's process ended — send again to start a new one: " + err.Error()})
 		s.busy = false
 		return nil
@@ -664,6 +736,73 @@ func (s *Session) sendToConv(prompt string) tea.Cmd {
 	if !fresh {
 		return nil // the listener from the first turn is still running
 	}
+	return waitForEvent(s.stream, s.ID, s.streamSeq)
+}
+
+// openConv launches the agent's process with the given settings. It returns
+// false when it could not, having said why in the conversation.
+func (s *Session) openConv(opts agent.RunOptions, warm bool) bool {
+	st, ok := s.Backend.(agent.Streamer)
+	if !ok {
+		return false
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	conv, err := st.Open(ctx, opts)
+	if err != nil {
+		stop()
+		if !warm {
+			s.tl.Append(Block{Kind: BlockError, Text: err.Error()})
+		}
+		return false
+	}
+	s.conv, s.convStop = conv, stop
+	ev := "conv.open"
+	if warm {
+		ev = "conv.prewarm"
+	}
+	crlog.Log(ev, "agent", s.ID, "dir", s.Dir,
+		"model", s.Model, "effort", s.Effort, "resume", s.agentSID != "")
+	s.streamSeq++
+	s.stream = conv.Events()
+	return true
+}
+
+// Prewarm launches the agent's process before there is anything to send it.
+//
+// A fresh process spends seconds booting before it will accept a message, and
+// none of that is in any transcript — the transcript is written by the process
+// after it has started. Measured from crema's own log against the transcripts
+// it produced, over twenty-one launches: median 4.6 seconds, up to 9.4, between
+// crema starting the process and the CLI accepting the message. The interactive
+// CLI pays that once when you open it; crema paid it on every new conversation,
+// every restart, every settings change that needs a new process.
+//
+// It is free to do early. The CLI loads everything it needs and then waits for
+// input — measured with nothing written to its stdin, its memory settled at
+// 226 MB within three seconds and its CPU went quiet — and it sends nothing to
+// the API until a message arrives. So the process is started when you look at
+// the agent, and the boot is over by the time you have finished typing.
+//
+// Only the agent you are looking at, because a waiting process holds a couple
+// of hundred megabytes. It returns the listener to arm, or nil.
+func (s *Session) Prewarm() tea.Cmd {
+	if s.conv != nil || s.busy {
+		return nil
+	}
+	if _, ok := s.Backend.(agent.Streamer); !ok {
+		return nil
+	}
+	opts := agent.RunOptions{
+		Dir: s.Dir, SessionID: s.agentSID,
+		Permission: s.Permission, Model: s.Model, Effort: s.Effort,
+	}
+	if !s.openConv(opts, true) {
+		return nil
+	}
+	s.lastOpts = opts
+	// The idle sweep lets go of a process nobody has used for an hour; a warm
+	// one that is never used should go the same way.
+	s.warmAt, s.convAt = time.Now(), time.Now()
 	return waitForEvent(s.stream, s.ID, s.streamSeq)
 }
 
@@ -709,7 +848,7 @@ func (s *Session) noteControl(r *agent.ControlReply) string {
 	}
 	switch what {
 	case "set_model", "set_permission_mode":
-		s.closeConv()
+		s.closeConv("the CLI would not change that setting on a live process")
 		return "the CLI would not switch live (" + r.Err + ") — the next message starts a fresh process with the new setting"
 	case "stop_task":
 		return "could not stop it: " + r.Err
@@ -762,17 +901,28 @@ func (s *Session) noteTaskList(list []agent.TaskUpdate) {
 // the CLI keeps the transcript, and the next turn resumes it by id — so this
 // is what every setting that lives on the command line does: model,
 // permissions, and starting over.
-func (s *Session) closeConv() {
+func (s *Session) closeConv(why string) {
+	// A conversation closed under a running turn kills that turn, and the CLI
+	// never gets to say so — the stream reports it as a cancellation and the
+	// answer simply never arrives. A turn that stops without a word is the
+	// hardest kind of bug to chase, so the reason is kept here, where it is
+	// known, and said in the transcript by finishTurn.
+	if s.busy {
+		s.stoppedBy = why
+	}
 	if s.conv != nil {
+		crlog.Log("conv.close", "agent", s.ID, "why", why,
+			"busy", s.busy, "running_tasks", s.RunningTasks())
 		go s.conv.Close() // draining its channel can block; never on the UI
 		s.conv = nil
-		s.endStrayTasks() // whatever it was running went with it
+		s.endStrayTasks(why)
 	}
 	if s.convStop != nil {
 		s.convStop()
 		s.convStop = nil
 	}
 	s.stream = nil
+	s.warmAt = time.Time{}
 }
 
 // maybeCloseIdleConv lets go of a process that has been sitting longer than
@@ -782,8 +932,24 @@ func (s *Session) maybeCloseIdleConv() {
 	if s.conv == nil || s.busy || s.convAt.IsZero() {
 		return
 	}
+	// A subagent still running is not an idle process — it is the work. The
+	// clock only measured how long since you last typed, so an agent that had
+	// been handed a long job and left to it was killed an hour after the
+	// message that started it, mid-tool-call, and the answer never came.
+	// Closing the conversation kills the process tree, and everything it had
+	// running goes with it.
+	//
+	// Found in this machine's own transcripts: eight clusters of subagents
+	// whose last written line is a tool call or a half-finished thought, all
+	// falling silent together — a review that had been running fifty minutes
+	// among them.
+	if s.RunningTasks() > 0 {
+		s.convAt = time.Now() // the hour starts when the work stops
+		return
+	}
 	if time.Since(s.convAt) > convIdleLife {
-		s.closeConv()
+		crlog.Log("conv.idle_sweep", "agent", s.ID, "idle_min", int(time.Since(s.convAt).Minutes()))
+		s.closeConv("the process had been idle for an hour")
 	}
 }
 
@@ -810,7 +976,7 @@ func (s *Session) cancelTurn() bool {
 	}
 	if s.conv != nil {
 		s.canceled = true
-		s.closeConv()
+		s.closeConv("you canceled it")
 		s.tl.Append(Block{Kind: BlockSystem, Text: "canceling the current turn…"})
 		return true
 	}
@@ -824,7 +990,7 @@ func (s *Session) cancelTurn() bool {
 
 // close cancels any running turn and drains the stream so its goroutine ends.
 func (s *Session) close() {
-	s.closeConv()
+	s.closeConv("the agent was closed")
 	if s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
